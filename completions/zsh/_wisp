@@ -1,0 +1,21 @@
+#compdef wisp
+
+_wisp() {
+  local -a commands
+  commands=(
+    'nvim:open Neovim in a floating terminal'
+    'vim:open Vim in a floating terminal'
+    'yazi:open Yazi in a floating terminal'
+    'less:open less in a floating terminal'
+    'bash:open Bash in a floating terminal'
+    'zsh:open Zsh in a floating terminal'
+    'waystone:open Waystone in a floating terminal'
+  )
+
+  _arguments -C \
+    '(-h --help help)'{-h,--help,help}'[show help]' \
+    '1:command: _describe -t commands "commands" commands' \
+    '*::arguments:_normal'
+}
+
+_wisp "$@"

@@ -1,0 +1,23 @@
+_wisp_completion() {
+  local cur prev
+  COMPREPLY=()
+  cur="${COMP_WORDS[COMP_CWORD]}"
+  prev="${COMP_WORDS[COMP_CWORD - 1]}"
+
+  if [[ $COMP_CWORD -eq 1 ]]; then
+    local commands="nvim vim yazi less bash zsh waystone help --help -h"
+    COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
+    return 0
+  fi
+
+  case "$prev" in
+    nvim|vim|less|yazi)
+      COMPREPLY=( $(compgen -f -- "$cur") )
+      ;;
+    *)
+      COMPREPLY=( $(compgen -f -- "$cur") )
+      ;;
+  esac
+}
+
+complete -F _wisp_completion wisp

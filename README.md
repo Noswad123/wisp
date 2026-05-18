@@ -16,6 +16,21 @@ By default this installs to `~/.local/bin`. Override with:
 WISP_BIN_DIR=/usr/local/bin ./install.sh
 ```
 
+Completions install by default to:
+
+```text
+~/.local/share/zsh/site-functions/_wisp
+~/.local/share/bash-completion/completions/wisp
+```
+
+Override or disable completion installation with:
+
+```bash
+WISP_ZSH_COMPLETION_DIR=/path/to/site-functions ./install.sh
+WISP_BASH_COMPLETION_DIR=/path/to/bash-completion ./install.sh
+WISP_INSTALL_COMPLETIONS=0 ./install.sh
+```
+
 ## Usage
 
 ```bash

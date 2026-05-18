@@ -4,10 +4,12 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
 bash -n "$repo_root/bin/wisp"
+bash -n "$repo_root/completions/bash/wisp"
+zsh -n "$repo_root/completions/zsh/_wisp"
 "$repo_root/bin/wisp" --help >/dev/null
 
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck "$repo_root/bin/wisp" "$repo_root/install.sh"
+  shellcheck "$repo_root/bin/wisp" "$repo_root/install.sh" "$repo_root/completions/bash/wisp"
 fi
 
 printf 'wisp smoke test passed\n'
