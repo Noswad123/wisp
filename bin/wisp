@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Open a floating kitty terminal window running an arbitrary command.
+
+WISP_COMMAND="$(basename "$0")"
+WISP_PATH="${WISP_PATH:-}"
+WISP_DIR="${WISP_DIR:-}"
+WISP_TITLE="${WISP_TITLE:-}"
+
+usage() {
+  printf 'Usage: WISP_TITLE="title" WISP_DIR="dir" %s <command> [args...]\n' "$WISP_COMMAND"
+}
+
+if [[ $# -eq 0 ]]; then
+  usage >&2
+  exit 1
+fi
+
+case "${1:-}" in
+  -h|--help|help)
+    usage
+    exit 0
+    ;;
+esac
+
+COMMAND="$1"
+TARGET_PATH="$WISP_PATH"
+RESOLVED_COMMAND="$(command -v "$COMMAND" 2>/dev/null || true)"
+if [[ -z "$RESOLVED_COMMAND" && -x "$COMMAND" ]]; then
+  RESOLVED_COMMAND="$COMMAND"
+fi
+
+if [[ -z "$RESOLVED_COMMAND" ]]; then
+  osascript -e "display notification \"$COMMAND was not found on PATH\" with title \"$WISP_COMMAND\"" >/dev/null 2>&1 || true
+  printf '%s: command not found: %s\n' "$WISP_COMMAND" "$COMMAND" >&2
+  exit 1
+fi
+
+shift
+ORIGINAL_ARGS=("$COMMAND" "$@")
+
+if [[ -z "$TARGET_PATH" && $# -ge 2 && ( -e "$2" || ! "$2" == -* ) ]]; then
+  TARGET_PATH="$2"
+fi
+
+if [[ -n "$TARGET_PATH" ]]; then
+  if [[ -d "$TARGET_PATH" ]]; then
+    DEFAULT_WORK_DIR="$TARGET_PATH"
+    DEFAULT_DISPLAY_PATH="$TARGET_PATH"
+  else
+    DEFAULT_WORK_DIR="$(dirname "$TARGET_PATH")"
+    DEFAULT_DISPLAY_PATH="$TARGET_PATH"
+  fi
+else
+  DEFAULT_WORK_DIR="$PWD"
+  DEFAULT_DISPLAY_PATH=""
+fi
+
+WORK_DIR="${WISP_DIR:-$DEFAULT_WORK_DIR}"
+
+if [[ -n "$DEFAULT_DISPLAY_PATH" && "$DEFAULT_DISPLAY_PATH" == "$HOME"/* ]]; then
+  DEFAULT_DISPLAY_PATH="~/${DEFAULT_DISPLAY_PATH#"$HOME"/}"
+fi
+
+if [[ -n "$DEFAULT_DISPLAY_PATH" ]]; then
+  DEFAULT_TITLE="$WISP_COMMAND: $DEFAULT_DISPLAY_PATH"
+else
+  DEFAULT_TITLE="$WISP_COMMAND: $COMMAND"
+fi
+
+WINDOW_TITLE="${WISP_TITLE:-$DEFAULT_TITLE}"
+
+if [[ ! -d "$WORK_DIR" ]]; then
+  printf '%s: working directory does not exist: %s\n' "$WISP_COMMAND" "$WORK_DIR" >&2
+  exit 1
+fi
+
+if [[ ! -d /Applications/kitty.app ]] && ! command -v kitty >/dev/null 2>&1; then
+  osascript -e "display notification \"kitty was not found\" with title \"$WISP_COMMAND\"" >/dev/null 2>&1 || true
+  exit 1
+fi
+
+open -na kitty --args \
+  --detach=no \
+  --single-instance=no \
+  --override macos_quit_when_last_window_closed=yes \
+  --title "$WINDOW_TITLE" \
+  --override hide_window_decorations=no \
+  --override remember_window_size=no \
+  --override initial_window_width=70c \
+  --override initial_window_height=38c \
+  /bin/zsh -lc 'cd -- "$1" && shift && exec "$@"' wisp "$WORK_DIR" "${ORIGINAL_ARGS[@]}" \
+  >/dev/null 2>&1 &
+
+if command -v aerospace >/dev/null 2>&1; then
+  (
+    for _ in {1..30}; do
+      focused_window="$(aerospace list-windows --focused --format '%{app-bundle-id}|%{window-title}' 2>/dev/null || true)"
+      if [[ "$focused_window" == net.kovidgoyal.kitty\|*"$WINDOW_TITLE"* ]]; then
+        aerospace layout floating >/dev/null 2>&1 || true
+        exit 0
+      fi
+      sleep 0.1
+    done
+  ) >/dev/null 2>&1 &
+fi
