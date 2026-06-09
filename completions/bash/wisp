@@ -5,7 +5,7 @@ _wisp_completion() {
   prev="${COMP_WORDS[COMP_CWORD - 1]}"
 
   if [[ $COMP_CWORD -eq 1 ]]; then
-    local commands="nvim vim yazi less bash zsh waystone help --help -h"
+    local commands="nvim vim yazi less bash zsh waystone help --help -h --terminal -t"
     COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
     return 0
   fi

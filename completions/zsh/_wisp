@@ -14,6 +14,7 @@ _wisp() {
 
   _arguments -C \
     '(-h --help help)'{-h,--help,help}'[show help]' \
+    '(-t --terminal)'{-t,--terminal}'[open a floating terminal]' \
     '1:command: _describe -t commands "commands" commands' \
     '*::arguments:_normal'
 }

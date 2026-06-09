@@ -34,6 +34,7 @@ WISP_INSTALL_COMPLETIONS=0 ./install.sh
 ## Usage
 
 ```bash
+wisp --terminal
 wisp nvim README.md
 wisp yazi ~/Downloads
 wisp waystone nvim
@@ -46,6 +47,7 @@ wisp waystone nvim
 | `WISP_TITLE` | Override floating window title |
 | `WISP_DIR` | Override working directory |
 | `WISP_PATH` | Path used to infer title and working directory |
+| `WISP_SHELL` | Shell used by `wisp --terminal`; defaults to `$SHELL`, then `/bin/zsh` |
 
 ## Dependencies
 

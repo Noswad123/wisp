@@ -7,9 +7,11 @@ WISP_COMMAND="$(basename "$0")"
 WISP_PATH="${WISP_PATH:-}"
 WISP_DIR="${WISP_DIR:-}"
 WISP_TITLE="${WISP_TITLE:-}"
+WISP_SHELL="${WISP_SHELL:-${SHELL:-/bin/zsh}}"
 
 usage() {
-  printf 'Usage: WISP_TITLE="title" WISP_DIR="dir" %s <command> [args...]\n' "$WISP_COMMAND"
+  printf 'Usage: WISP_TITLE="title" WISP_DIR="dir" %s --terminal\n' "$WISP_COMMAND"
+  printf '       WISP_TITLE="title" WISP_DIR="dir" %s <command> [args...]\n' "$WISP_COMMAND"
 }
 
 if [[ $# -eq 0 ]]; then
@@ -24,7 +26,22 @@ case "${1:-}" in
     ;;
 esac
 
-COMMAND="$1"
+TERMINAL_MODE=0
+case "${1:-}" in
+  -t|--terminal)
+    TERMINAL_MODE=1
+    COMMAND="$WISP_SHELL"
+    shift
+    if [[ $# -ne 0 ]]; then
+      printf '%s: --terminal does not accept arguments; use `%s <shell> [args...]` instead\n' "$WISP_COMMAND" "$WISP_COMMAND" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    COMMAND="$1"
+    ;;
+esac
+
 TARGET_PATH="$WISP_PATH"
 RESOLVED_COMMAND="$(command -v "$COMMAND" 2>/dev/null || true)"
 if [[ -z "$RESOLVED_COMMAND" && -x "$COMMAND" ]]; then
@@ -37,8 +54,12 @@ if [[ -z "$RESOLVED_COMMAND" ]]; then
   exit 1
 fi
 
-shift
-ORIGINAL_ARGS=("$COMMAND" "$@")
+if [[ "$TERMINAL_MODE" -eq 1 ]]; then
+  ORIGINAL_ARGS=("$COMMAND")
+else
+  shift
+  ORIGINAL_ARGS=("$COMMAND" "$@")
+fi
 
 if [[ -z "$TARGET_PATH" && $# -ge 2 && ( -e "$2" || ! "$2" == -* ) ]]; then
   TARGET_PATH="$2"
@@ -65,6 +86,8 @@ fi
 
 if [[ -n "$DEFAULT_DISPLAY_PATH" ]]; then
   DEFAULT_TITLE="$WISP_COMMAND: $DEFAULT_DISPLAY_PATH"
+elif [[ "$TERMINAL_MODE" -eq 1 ]]; then
+  DEFAULT_TITLE="$WISP_COMMAND: terminal"
 else
   DEFAULT_TITLE="$WISP_COMMAND: $COMMAND"
 fi
