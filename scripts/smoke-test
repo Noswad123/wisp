@@ -7,6 +7,13 @@ bash -n "$repo_root/bin/wisp"
 bash -n "$repo_root/completions/bash/wisp"
 zsh -n "$repo_root/completions/zsh/_wisp"
 "$repo_root/bin/wisp" --help >/dev/null
+"$repo_root/bin/wisp" doctor >/dev/null
+"$repo_root/bin/wisp" rules aerospace >/dev/null
+"$repo_root/bin/wisp" rules hyprland >/dev/null
+if "$repo_root/bin/wisp" run --id smoke -- definitely-not-a-wisp-command >/dev/null 2>&1; then
+  printf 'expected missing command check to fail\n' >&2
+  exit 1
+fi
 
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck "$repo_root/bin/wisp" "$repo_root/install.sh" "$repo_root/completions/bash/wisp"

@@ -1,8 +1,8 @@
 # wisp
 
-`wisp` opens a command in a floating kitty terminal window.
+`wisp` opens a command in a floating utility surface.
 
-It is part of the Jamal Arcana ecosystem, but it is intentionally generic: `wisp` floats whatever command it receives and does not know about any specific companion tool.
+It is part of the Jamal Arcana ecosystem, but it is intentionally generic: `wisp` presents whatever command it receives and does not know about any specific companion tool. Window-manager integration should key off Wisp's stable surface identity instead of guessing that an arbitrary terminal window is special.
 
 ## Install
 
@@ -38,22 +38,102 @@ wisp --terminal
 wisp nvim README.md
 wisp yazi ~/Downloads
 wisp waystone nvim
+
+# Explicit command form.
+wisp run --id edit -- nvim README.md
+
+# Named singleton surface. If supported by the active backend, focusing an
+# existing wisp:scratch window is preferred over creating a duplicate.
+wisp summon scratch -- nvim ~/Projects/darkness/introspection/scratch.md
+
+# Diagnostics and window-manager rule snippets.
+wisp doctor
+wisp rules aerospace
+wisp rules hyprland
 ```
+
+Legacy `wisp <command> [args...]` and `wisp --terminal` remain supported.
+
+## Surface identity
+
+Wisp titles are normalized to:
+
+```text
+wisp:<id>: <label>
+```
+
+Examples:
+
+```text
+wisp:nvim: README.md
+wisp:scratch: ~/Projects/darkness/introspection/scratch.md
+```
+
+The launched command receives:
+
+| Variable | Purpose |
+| --- | --- |
+| `WISP` | Set to `1` inside Wisp surfaces |
+| `WISP_ID` | Stable Wisp surface id |
+| `WISP_ROLE` | `run`, `shell`, or `summon` |
+| `WISP_TITLE` | Full normalized Wisp title |
+
+## Aerospace
+
+Prefer an Aerospace detection rule over post-launch correction:
+
+```bash
+wisp rules aerospace
+```
+
+Current output:
+
+```toml
+on-window-detected = [
+    { if.app-id = 'net.kovidgoyal.kitty', if.window-title-regex-substring = '^wisp:', run = 'layout floating' },
+]
+```
+
+Wisp still keeps a best-effort post-launch `aerospace layout floating` fallback for compatibility.
+
+## Hyprland
+
+When `HYPRLAND_INSTANCE_SIGNATURE` and `hyprctl` are available, Wisp uses the
+Hyprland backend automatically. No static Hyprland rule is required; Wisp launches
+Kitty with one-shot rules that place the surface on a floating special workspace:
+
+```text
+special:wisp
+```
+
+Override the special workspace name with:
+
+```bash
+WISP_HYPRLAND_WORKSPACE=scratch wisp summon scratch -- nvim ~/scratch.md
+```
+
+Named `summon` surfaces try to focus an existing matching `wisp:<id>:` window
+before creating a new one. The Hyprland lookup uses `python3` to parse
+`hyprctl -j clients`.
 
 ## Environment
 
 | Variable | Purpose |
 | --- | --- |
 | `WISP_TITLE` | Override floating window title |
+| `WISP_ID` | Stable surface id |
 | `WISP_DIR` | Override working directory |
 | `WISP_PATH` | Path used to infer title and working directory |
 | `WISP_SHELL` | Shell used by `wisp --terminal`; defaults to `$SHELL`, then `/bin/zsh` |
+| `WISP_BACKEND` | Override backend: `auto`, `aerospace`, `hyprland`, or `kitty` |
+| `WISP_HYPRLAND_WORKSPACE` | Hyprland special workspace name; defaults to `wisp` |
 
 ## Dependencies
 
 - macOS `open`
 - kitty
-- optional: Aerospace, for post-open floating layout adjustment
+- optional: Aerospace, for rule-based floating and named-surface focusing
+- optional: Hyprland + `hyprctl` + `python3`, for Linux special-workspace surfaces
 
 ## License
 

@@ -3,6 +3,11 @@
 _wisp() {
   local -a commands
   commands=(
+    'run:open a command in a Wisp surface'
+    'shell:open a shell in a Wisp surface'
+    'summon:open or focus a named Wisp surface'
+    'doctor:print Wisp diagnostics'
+    'rules:print window-manager rule snippets'
     'nvim:open Neovim in a floating terminal'
     'vim:open Vim in a floating terminal'
     'yazi:open Yazi in a floating terminal'
@@ -15,6 +20,10 @@ _wisp() {
   _arguments -C \
     '(-h --help help)'{-h,--help,help}'[show help]' \
     '(-t --terminal)'{-t,--terminal}'[open a floating terminal]' \
+    '--id[stable Wisp surface id]:id:' \
+    '--title[human title label]:title:' \
+    '--dir[working directory]:directory:_files -/' \
+    '--path[path used to infer title and working directory]:path:_files' \
     '1:command: _describe -t commands "commands" commands' \
     '*::arguments:_normal'
 }
