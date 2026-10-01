@@ -742,10 +742,10 @@ kind = "summon"
 command = ["zsh", "-lc", "aeros"]
 
 [[action]]
-id = "hpm"
+id = "kpm"
 title = "Maintain Panes"
 kind = "summon"
-command = ["hpm"]
+command = ["kpm"]
 
 [[action]]
 id = "terminal"
