@@ -46,6 +46,12 @@ wisp run --id edit -- nvim README.md
 # existing wisp:scratch window is preferred over creating a duplicate.
 wisp summon scratch -- nvim ~/Projects/darkness/introspection/scratch.md
 
+# Action catalog and palette.
+wisp actions init
+wisp actions list
+wisp action scratch
+wisp palette
+
 # Diagnostics and window-manager rule snippets.
 wisp doctor
 wisp rules aerospace
@@ -53,6 +59,55 @@ wisp rules hyprland
 ```
 
 Legacy `wisp <command> [args...]` and `wisp --terminal` remain supported.
+
+## Actions and palette
+
+Wisp can also act as a small Raycast/Tuna-like launcher. Actions live in:
+
+```text
+~/.config/wisp/actions.toml
+```
+
+Create a starter catalog with:
+
+```bash
+wisp actions init
+```
+
+Example action:
+
+```toml
+[[action]]
+id = "scratch"
+title = "Scratch Notes"
+kind = "summon"
+command = ["nvim", "~/Projects/darkness/introspection/scratch.md"]
+```
+
+Supported `kind` values:
+
+| Kind | Behavior |
+| --- | --- |
+| `summon` | Named singleton surface; focus existing if possible, otherwise launch |
+| `run` | Launch a new Wisp surface |
+| `shell` | Launch a floating shell |
+
+Run actions directly:
+
+```bash
+wisp action scratch
+```
+
+Open the searchable action palette:
+
+```bash
+wisp palette
+```
+
+`wisp palette` launches a Wisp surface running `fzf`; selecting an action runs
+`wisp action <id>` as a detached process. A window manager can bind a global key to `wisp palette`,
+making Wisp the command palette while the window manager only handles key capture.
+Detached palette action output is appended to `~/.cache/wisp/wisp.log` by default.
 
 ## Surface identity
 
@@ -127,11 +182,15 @@ before creating a new one. The Hyprland lookup uses `python3` to parse
 | `WISP_SHELL` | Shell used by `wisp --terminal`; defaults to `$SHELL`, then `/bin/zsh` |
 | `WISP_BACKEND` | Override backend: `auto`, `aerospace`, `hyprland`, or `kitty` |
 | `WISP_HYPRLAND_WORKSPACE` | Hyprland special workspace name; defaults to `wisp` |
+| `WISP_ACTIONS_PATH` | Action catalog path; defaults to `~/.config/wisp/actions.toml` |
+| `WISP_LOG_PATH` | Log path for detached palette actions; defaults to `~/.cache/wisp/wisp.log` |
 
 ## Dependencies
 
 - macOS `open`
 - kitty
+- python3, for action catalog parsing
+- optional: fzf, for `wisp palette`
 - optional: Aerospace, for rule-based floating and named-surface focusing
 - optional: Hyprland + `hyprctl` + `python3`, for Linux special-workspace surfaces
 

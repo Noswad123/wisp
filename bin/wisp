@@ -11,6 +11,11 @@ WISP_TITLE="${WISP_TITLE:-}"
 WISP_SHELL="${WISP_SHELL:-${SHELL:-/bin/zsh}}"
 WISP_BACKEND="${WISP_BACKEND:-auto}"
 WISP_HYPRLAND_WORKSPACE="${WISP_HYPRLAND_WORKSPACE:-wisp}"
+WISP_CONFIG_HOME="${WISP_CONFIG_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/wisp}"
+WISP_ACTIONS_PATH="${WISP_ACTIONS_PATH:-$WISP_CONFIG_HOME/actions.toml}"
+WISP_CACHE_HOME="${WISP_CACHE_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/wisp}"
+WISP_LOG_PATH="${WISP_LOG_PATH:-$WISP_CACHE_HOME/wisp.log}"
+WISP_SELF="${WISP_SELF:-${BASH_SOURCE[0]}}"
 
 MODE="run"
 TERMINAL_MODE=0
@@ -31,6 +36,9 @@ Usage:
   $WISP_COMMAND run [--id ID] [--title TITLE] [--dir DIR] [--path PATH] -- <command> [args...]
   $WISP_COMMAND shell [--id ID] [--title TITLE] [--dir DIR]
   $WISP_COMMAND summon <id> [--title TITLE] [--dir DIR] [--path PATH] -- <command> [args...]
+  $WISP_COMMAND action <id>
+  $WISP_COMMAND actions [list|init|path]
+  $WISP_COMMAND palette
   $WISP_COMMAND doctor
   $WISP_COMMAND rules [aerospace|hyprland]
 
@@ -41,6 +49,8 @@ Environment:
   WISP_PATH     Path used to infer title and working directory.
   WISP_SHELL    Shell for --terminal/shell. Defaults to SHELL, then /bin/zsh.
   WISP_BACKEND  Backend override: auto, aerospace, hyprland, kitty.
+  WISP_ACTIONS_PATH  Action catalog path. Defaults to ~/.config/wisp/actions.toml.
+  WISP_LOG_PATH  Log path for detached palette actions. Defaults to ~/.cache/wisp/wisp.log.
 EOF
 }
 
@@ -49,6 +59,11 @@ notify() {
   if command -v osascript >/dev/null 2>&1; then
     osascript -e "display notification \"$message\" with title \"$WISP_COMMAND\"" >/dev/null 2>&1 || true
   fi
+}
+
+log_line() {
+  mkdir -p "$(dirname "$WISP_LOG_PATH")" 2>/dev/null || true
+  printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$WISP_LOG_PATH" 2>/dev/null || true
 }
 
 die() {
@@ -114,7 +129,187 @@ doctor() {
     printf '  hyprland: not detected\n'
   fi
 
+  if [[ -f "$WISP_ACTIONS_PATH" ]]; then
+    printf '  actions: %s\n' "$WISP_ACTIONS_PATH"
+  else
+    printf '  actions: missing (%s)\n' "$WISP_ACTIONS_PATH"
+  fi
+
+  printf '  log: %s\n' "$WISP_LOG_PATH"
+
+  if command -v fzf >/dev/null 2>&1; then
+    printf '  fzf: ok\n'
+  else
+    printf '  fzf: missing\n'
+  fi
+
   printf '  selected backend: %s\n' "$(select_backend 2>/dev/null || printf unavailable)"
+}
+
+need_python() {
+  command -v python3 >/dev/null 2>&1 || die 'python3 is required for Wisp actions'
+}
+
+actions_python() {
+  need_python
+  python3 - "$@" <<'PY'
+from __future__ import annotations
+
+import os
+import shlex
+import sys
+import tomllib
+from pathlib import Path
+
+
+def expand(value: str) -> str:
+    return os.path.expandvars(os.path.expanduser(value))
+
+
+def load_actions(path: str) -> list[dict]:
+    config_path = Path(expand(path))
+    if not config_path.exists():
+        raise SystemExit(f"actions file not found: {config_path}")
+
+    with config_path.open("rb") as handle:
+        config = tomllib.load(handle)
+
+    actions = config.get("action", [])
+    if not isinstance(actions, list):
+        raise SystemExit("actions file must contain [[action]] entries")
+    return [action for action in actions if isinstance(action, dict)]
+
+
+def normalized_command(action: dict) -> list[str]:
+    command = action.get("command")
+    if isinstance(command, str):
+        return ["sh", "-lc", command]
+    if isinstance(command, list) and all(isinstance(item, str) for item in command):
+        return [expand(item) for item in command]
+    raise SystemExit(f"action {action.get('id', '<unknown>')!r} must define command as a string or string array")
+
+
+def find_action(actions: list[dict], action_id: str) -> dict:
+    for action in actions:
+        if action.get("id") == action_id:
+            return action
+    raise SystemExit(f"action not found: {action_id}")
+
+
+command = sys.argv[1]
+path = sys.argv[2]
+
+if command == "list":
+    for action in load_actions(path):
+        action_id = str(action.get("id") or "").strip()
+        if not action_id:
+            continue
+        title = str(action.get("title") or action_id)
+        kind = str(action.get("kind") or "summon")
+        print(f"{action_id}\t{title}\t{kind}")
+elif command == "shell":
+    action = find_action(load_actions(path), sys.argv[3])
+    action_id = str(action.get("id") or sys.argv[3])
+    title = str(action.get("title") or action_id)
+    kind = str(action.get("kind") or "summon")
+    if kind not in {"run", "summon", "shell"}:
+        raise SystemExit(f"unsupported action kind for {action_id}: {kind}")
+    command_args = [] if kind == "shell" else normalized_command(action)
+
+    print(f"ACTION_ID={shlex.quote(action_id)}")
+    print(f"ACTION_TITLE={shlex.quote(title)}")
+    print(f"ACTION_KIND={shlex.quote(kind)}")
+    print("ACTION_COMMAND=(" + " ".join(shlex.quote(arg) for arg in command_args) + ")")
+else:
+    raise SystemExit(f"unknown actions command: {command}")
+PY
+}
+
+actions_sample() {
+  cat <<'EOF'
+[[action]]
+id = "scratch"
+title = "Scratch Notes"
+kind = "summon"
+command = ["nvim", "~/Projects/darkness/introspection/scratch.md"]
+
+[[action]]
+id = "aero"
+title = "Aerospace Manager"
+kind = "summon"
+command = ["zsh", "-lc", "aeros"]
+
+[[action]]
+id = "hpm"
+title = "Maintain Panes"
+kind = "summon"
+command = ["hpm"]
+
+[[action]]
+id = "terminal"
+title = "Floating Terminal"
+kind = "shell"
+command = []
+EOF
+}
+
+actions_init() {
+  if [[ -e "$WISP_ACTIONS_PATH" ]]; then
+    die "actions file already exists: $WISP_ACTIONS_PATH"
+  fi
+
+  mkdir -p "$(dirname "$WISP_ACTIONS_PATH")"
+  actions_sample > "$WISP_ACTIONS_PATH"
+  printf 'created %s\n' "$WISP_ACTIONS_PATH"
+}
+
+actions_list() {
+  actions_python list "$WISP_ACTIONS_PATH"
+}
+
+load_action() {
+  local action_id="$1"
+  local assignments
+  assignments="$(actions_python shell "$WISP_ACTIONS_PATH" "$action_id")"
+  eval "$assignments"
+
+  # shellcheck disable=SC2153 # ACTION_* variables are produced by actions_python above.
+  WISP_ID="$ACTION_ID"
+  # shellcheck disable=SC2153 # ACTION_* variables are produced by actions_python above.
+  WISP_TITLE="$ACTION_TITLE"
+  # shellcheck disable=SC2153 # ACTION_* variables are produced by actions_python above.
+  MODE="$ACTION_KIND"
+
+  if [[ "$ACTION_KIND" == "shell" ]]; then
+    TERMINAL_MODE=1
+    COMMAND="$WISP_SHELL"
+    COMMAND_ARGS=()
+  else
+    COMMAND="${ACTION_COMMAND[0]}"
+    COMMAND_ARGS=("${ACTION_COMMAND[@]:1}")
+  fi
+}
+
+palette_body() {
+  command -v fzf >/dev/null 2>&1 || die 'fzf is required for wisp palette'
+
+  local selection action_id
+  selection="$(actions_list | fzf --prompt='Wisp> ' --delimiter=$'\t' --with-nth=2,3 --height=100% --border --ansi)" || exit 0
+  action_id="${selection%%$'\t'*}"
+  [[ -n "$action_id" ]] || exit 0
+
+  log_line "palette selected action=$action_id"
+  log_line "palette launching action=$action_id"
+  "$WISP_SELF" action "$action_id" >> "$WISP_LOG_PATH" 2>&1
+  exit 0
+}
+
+start_palette() {
+  MODE="run"
+  WISP_ID="palette"
+  WISP_TITLE="Wisp Palette"
+  COMMAND="$WISP_SELF"
+  COMMAND_ARGS=("_palette")
 }
 
 parse_common_option() {
@@ -208,6 +403,44 @@ parse_args() {
     doctor)
       doctor
       exit 0
+      ;;
+    _palette)
+      palette_body
+      ;;
+    _launch_action)
+      shift
+      [[ $# -gt 0 ]] || die '_launch_action requires an id'
+      sleep 0.2
+      log_line "palette launching action=$1"
+      load_action "$1"
+      ;;
+    palette)
+      start_palette
+      ;;
+    action)
+      shift
+      [[ $# -gt 0 ]] || die 'action requires an id'
+      load_action "$1"
+      ;;
+    actions)
+      shift
+      case "${1:-list}" in
+        list)
+          actions_list
+          exit 0
+          ;;
+        init)
+          actions_init
+          exit 0
+          ;;
+        path)
+          printf '%s\n' "$WISP_ACTIONS_PATH"
+          exit 0
+          ;;
+        *)
+          die "unknown actions command: $1" 2
+          ;;
+      esac
       ;;
     rules)
       shift
@@ -444,7 +677,7 @@ launch_macos_kitty() {
     --override remember_window_size=no \
     --override initial_window_width=70c \
     --override initial_window_height=38c \
-    /bin/zsh -lc 'work_dir="$1"; wisp_id="$2"; wisp_role="$3"; wisp_title="$4"; shift 4; cd -- "$work_dir" && export WISP=1 WISP_ID="$wisp_id" WISP_ROLE="$wisp_role" WISP_TITLE="$wisp_title" && exec "$@"' \
+    /bin/zsh -lc 'work_dir="$1"; wisp_id="$2"; wisp_role="$3"; wisp_title="$4"; shift 4; cd -- "$work_dir" && export WISP=1 WISP_ID="$wisp_id" WISP_ROLE="$wisp_role" WISP_TITLE="$wisp_title"; if command -v aerospace >/dev/null 2>&1; then aerospace layout floating >/dev/null 2>&1 || true; fi; exec "$@"' \
     wisp "$WORK_DIR" "$SURFACE_ID" "$MODE" "$WINDOW_TITLE" "${ORIGINAL_ARGS[@]}" \
     >/dev/null 2>&1 &
 }

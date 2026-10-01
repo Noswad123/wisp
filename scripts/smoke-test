@@ -2,14 +2,24 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+tmp_dir="${TMPDIR:-/tmp}/wisp-smoke.$$"
+trap 'rm -rf "$tmp_dir"' EXIT
+mkdir -p "$tmp_dir"
 
 bash -n "$repo_root/bin/wisp"
 bash -n "$repo_root/completions/bash/wisp"
 zsh -n "$repo_root/completions/zsh/_wisp"
 "$repo_root/bin/wisp" --help >/dev/null
 "$repo_root/bin/wisp" doctor >/dev/null
+doctor_output="$($repo_root/bin/wisp doctor)"
+[[ "$doctor_output" == *$'  log: '* ]]
 "$repo_root/bin/wisp" rules aerospace >/dev/null
 "$repo_root/bin/wisp" rules hyprland >/dev/null
+WISP_ACTIONS_PATH="$tmp_dir/actions.toml" "$repo_root/bin/wisp" actions init >/dev/null
+actions_output="$(WISP_ACTIONS_PATH="$tmp_dir/actions.toml" "$repo_root/bin/wisp" actions list)"
+[[ "$actions_output" == *$'scratch\tScratch Notes\tsummon'* ]]
+actions_path="$(WISP_ACTIONS_PATH="$tmp_dir/actions.toml" "$repo_root/bin/wisp" actions path)"
+[[ "$actions_path" == "$tmp_dir/actions.toml" ]]
 if "$repo_root/bin/wisp" run --id smoke -- definitely-not-a-wisp-command >/dev/null 2>&1; then
   printf 'expected missing command check to fail\n' >&2
   exit 1
