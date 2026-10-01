@@ -9,7 +9,10 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
       - name: Syntax check
-        run: bash -n bin/wisp install.sh scripts/smoke-test completions/bash/wisp && zsh -n completions/zsh/_wisp
+        run: bash -n install.sh scripts/smoke-test completions/bash/wisp && zsh -n completions/zsh/_wisp
       - name: Smoke test
         run: scripts/smoke-test
