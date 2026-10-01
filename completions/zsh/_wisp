@@ -9,6 +9,8 @@ _wisp() {
     'action:run an action from the Wisp catalog'
     'actions:inspect or initialize the Wisp action catalog'
     'palette:open the Wisp action palette'
+    'bindings:print hotkey binding snippets'
+    'daemon:manage the Wisp daemon'
     'doctor:print Wisp diagnostics'
     'rules:print window-manager rule snippets'
     'nvim:open Neovim in a floating terminal'

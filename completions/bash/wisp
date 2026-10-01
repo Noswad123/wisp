@@ -8,7 +8,7 @@ _wisp_completion() {
   prev="${COMP_WORDS[COMP_CWORD - 1]}"
 
   if [[ $COMP_CWORD -eq 1 ]]; then
-    local commands="run shell summon action actions palette doctor rules nvim vim yazi less bash zsh waystone help --help -h --terminal -t"
+    local commands="run shell summon action actions palette bindings daemon doctor rules nvim vim yazi less bash zsh waystone help --help -h --terminal -t"
     COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
     return 0
   fi
@@ -20,6 +20,16 @@ _wisp_completion() {
 
   if [[ $COMP_CWORD -eq 2 && ${COMP_WORDS[1]} == "rules" ]]; then
     COMPREPLY=( $(compgen -W "aerospace hyprland" -- "$cur") )
+    return 0
+  fi
+
+  if [[ $COMP_CWORD -eq 2 && ${COMP_WORDS[1]} == "bindings" ]]; then
+    COMPREPLY=( $(compgen -W "aerospace hyprland" -- "$cur") )
+    return 0
+  fi
+
+  if [[ $COMP_CWORD -eq 2 && ${COMP_WORDS[1]} == "daemon" ]]; then
+    COMPREPLY=( $(compgen -W "start serve status stop reload" -- "$cur") )
     return 0
   fi
 

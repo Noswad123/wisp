@@ -12,7 +12,9 @@ tmp_bin="$(mktemp "${TMPDIR:-/tmp}/wisp.XXXXXX")"
 trap 'rm -f "$tmp_bin"' EXIT
 (cd "$repo_root" && go build -o "$tmp_bin" ./cmd/wisp)
 install -m 0755 "$tmp_bin" "$bin_dir/wisp"
+ln -sf "wisp" "$bin_dir/wispd"
 printf 'installed wisp -> %s/wisp\n' "$bin_dir"
+printf 'installed wispd -> %s/wispd\n' "$bin_dir"
 
 if [[ "$install_completions" != "0" ]]; then
   mkdir -p "$zsh_completion_dir" "$bash_completion_dir"

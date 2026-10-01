@@ -21,7 +21,12 @@ actions_output="$(WISP_ACTIONS_PATH="$tmp_dir/actions.toml" "$tmp_dir/wisp" acti
 [[ "$actions_output" == *$'scratch\tScratch Notes\tsummon'* ]]
 actions_path="$(WISP_ACTIONS_PATH="$tmp_dir/actions.toml" "$tmp_dir/wisp" actions path)"
 [[ "$actions_path" == "$tmp_dir/actions.toml" ]]
-if "$tmp_dir/wisp" run --id smoke -- definitely-not-a-wisp-command >/dev/null 2>&1; then
+WISP_ACTIONS_PATH="$tmp_dir/actions.toml" "$tmp_dir/wisp" bindings aerospace >/dev/null
+WISP_ACTIONS_PATH="$tmp_dir/actions.toml" "$tmp_dir/wisp" bindings hyprland >/dev/null
+WISP_SOCKET_PATH="$tmp_dir/wispd.sock" WISP_LOG_PATH="$tmp_dir/wisp.log" "$tmp_dir/wisp" daemon start >/dev/null
+WISP_SOCKET_PATH="$tmp_dir/wispd.sock" WISP_LOG_PATH="$tmp_dir/wisp.log" "$tmp_dir/wisp" daemon status >/dev/null
+WISP_SOCKET_PATH="$tmp_dir/wispd.sock" WISP_LOG_PATH="$tmp_dir/wisp.log" "$tmp_dir/wisp" daemon stop >/dev/null
+if WISP_NO_DAEMON=1 "$tmp_dir/wisp" run --id smoke -- definitely-not-a-wisp-command >/dev/null 2>&1; then
   printf 'expected missing command check to fail\n' >&2
   exit 1
 fi

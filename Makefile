@@ -10,6 +10,7 @@ build:
 	@echo "🔨 Building Go $(APP_NAME)..."
 	@mkdir -p "$(BIN_DIR)"
 	go build -o "$(BIN_DIR)/$(APP_NAME)" ./cmd/wisp
+	@ln -sf "$(APP_NAME)" "$(BIN_DIR)/wispd"
 
 check:
 	go test ./...
@@ -21,6 +22,7 @@ install: build
 	@echo "📦 Installing to $(INSTALL_DIR)/$(APP_NAME)"
 	@mkdir -p "$(INSTALL_DIR)"
 	install -m 0755 "$(BIN_DIR)/$(APP_NAME)" "$(INSTALL_DIR)/$(APP_NAME)"
+	ln -sf "$(APP_NAME)" "$(INSTALL_DIR)/wispd"
 	@if command -v xattr >/dev/null 2>&1; then \
 		xattr -d com.apple.quarantine "$(INSTALL_DIR)/$(APP_NAME)" 2>/dev/null || true; \
 	fi
@@ -40,10 +42,10 @@ clean:
 help:
 	@echo "Available targets:"
 	@echo "  all     - Build wisp (default)"
-	@echo "  build   - Build bin/wisp"
+	@echo "  build   - Build bin/wisp and bin/wispd symlink"
 	@echo "  check   - Run Go tests"
 	@echo "  fmt     - Format Go sources"
-	@echo "  install - Build and install to $(INSTALL_DIR)/wisp plus completions"
+	@echo "  install - Build and install to $(INSTALL_DIR)/wisp, wispd symlink, plus completions"
 	@echo "  smoke   - Run smoke test script"
 	@echo "  test    - Alias for check"
 	@echo "  clean   - Remove build artifacts"

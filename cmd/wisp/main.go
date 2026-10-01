@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,7 +23,19 @@ type action struct {
 	ID      string   `toml:"id"`
 	Title   string   `toml:"title"`
 	Kind    string   `toml:"kind"`
+	Key     string   `toml:"key"`
 	Command []string `toml:"command"`
+}
+
+type daemonRequest struct {
+	Op     string   `json:"op"`
+	Args   []string `json:"args,omitempty"`
+	Action string   `json:"action,omitempty"`
+}
+
+type daemonResponse struct {
+	OK      bool   `json:"ok"`
+	Message string `json:"message,omitempty"`
 }
 
 type actionsFile struct {
@@ -52,6 +65,7 @@ type envConfig struct {
 	actionsPath       string
 	cacheHome         string
 	logPath           string
+	socketPath        string
 	self              string
 	kittyInitialWidth string
 	kittyInitialHt    string
@@ -59,6 +73,13 @@ type envConfig struct {
 
 func main() {
 	cfg := loadEnv()
+	if cfg.command == "wispd" {
+		if err := daemonCommand(cfg, os.Args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", cfg.command, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(cfg, os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", cfg.command, err)
 		os.Exit(1)
@@ -83,6 +104,7 @@ func loadEnv() envConfig {
 		actionsPath:       envDefault("WISP_ACTIONS_PATH", filepath.Join(configHome, "actions.toml")),
 		cacheHome:         cacheHome,
 		logPath:           envDefault("WISP_LOG_PATH", filepath.Join(cacheHome, "wisp.log")),
+		socketPath:        envDefault("WISP_SOCKET_PATH", filepath.Join(runtimeDir(), "wispd.sock")),
 		self:              envDefault("WISP_SELF", self),
 		kittyInitialWidth: envDefault("WISP_KITTY_WIDTH", "70c"),
 		kittyInitialHt:    envDefault("WISP_KITTY_HEIGHT", "38c"),
@@ -95,10 +117,27 @@ func run(cfg envConfig, args []string) error {
 		return errors.New("missing command")
 	}
 
+	if shouldDelegate(args) && daemonUsable() {
+		if err := ensureDaemon(cfg); err == nil {
+			return sendDaemon(cfg, daemonRequest{Op: "launch", Args: args})
+		}
+	}
+
+	return runDirect(cfg, args)
+}
+
+func runDirect(cfg envConfig, args []string) error {
+	if len(args) == 0 {
+		usage(cfg, os.Stderr)
+		return errors.New("missing command")
+	}
+
 	switch args[0] {
 	case "-h", "--help", "help":
 		usage(cfg, os.Stdout)
 		return nil
+	case "daemon":
+		return daemonCommand(cfg, args[1:])
 	case "doctor":
 		return doctor(cfg)
 	case "rules":
@@ -107,6 +146,12 @@ func run(cfg envConfig, args []string) error {
 			backend = args[1]
 		}
 		return rules(backend)
+	case "bindings":
+		backend := "aerospace"
+		if len(args) > 1 {
+			backend = args[1]
+		}
+		return bindings(cfg, backend)
 	case "actions":
 		return actionsCommand(cfg, args[1:])
 	case "_palette":
@@ -118,11 +163,7 @@ func run(cfg envConfig, args []string) error {
 		if len(args) < 2 {
 			return errors.New("action requires an id")
 		}
-		inv, err := invocationFromAction(cfg, args[1])
-		if err != nil {
-			return err
-		}
-		return launchInvocation(cfg, inv)
+		return launchActionDirect(cfg, args[1])
 	case "_launch_action":
 		if len(args) < 2 {
 			return errors.New("_launch_action requires an id")
@@ -143,6 +184,198 @@ func run(cfg envConfig, args []string) error {
 	return launchInvocation(cfg, inv)
 }
 
+func shouldDelegate(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch args[0] {
+	case "action", "summon", "shell", "run", "palette", "-t", "--terminal":
+		return true
+	case "daemon", "doctor", "rules", "bindings", "actions", "_palette", "_launch_action", "-h", "--help", "help":
+		return false
+	default:
+		return true
+	}
+}
+
+func daemonUsable() bool {
+	return os.Getenv("WISP_DAEMON_BYPASS") == "" && os.Getenv("WISP_NO_DAEMON") == ""
+}
+
+func launchActionDirect(cfg envConfig, id string) error {
+	inv, err := invocationFromAction(cfg, id)
+	if err != nil {
+		return err
+	}
+	return launchInvocation(cfg, inv)
+}
+
+func daemonCommand(cfg envConfig, args []string) error {
+	sub := "status"
+	if len(args) > 0 {
+		sub = args[0]
+	}
+	switch sub {
+	case "start":
+		if err := startDaemon(cfg); err != nil {
+			return err
+		}
+		fmt.Printf("wispd started at %s\n", cfg.socketPath)
+		return nil
+	case "serve":
+		return serveDaemon(cfg)
+	case "status":
+		if err := sendDaemon(cfg, daemonRequest{Op: "ping"}); err != nil {
+			return fmt.Errorf("wispd is not running at %s", cfg.socketPath)
+		}
+		fmt.Printf("wispd is running at %s\n", cfg.socketPath)
+		return nil
+	case "stop":
+		return sendDaemon(cfg, daemonRequest{Op: "stop"})
+	case "reload":
+		return sendDaemon(cfg, daemonRequest{Op: "reload"})
+	default:
+		return fmt.Errorf("unknown daemon command: %s", sub)
+	}
+}
+
+func ensureDaemon(cfg envConfig) error {
+	if err := pingDaemon(cfg); err == nil {
+		return nil
+	}
+	if os.Getenv("WISP_DAEMON_AUTOSTART") == "0" {
+		return errors.New("wispd is not running")
+	}
+	if err := startDaemon(cfg); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := pingDaemon(cfg); err == nil {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return errors.New("timed out waiting for wispd")
+}
+
+func startDaemon(cfg envConfig) error {
+	if err := pingDaemon(cfg); err == nil {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(expand(cfg.socketPath)), 0o700); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(expand(cfg.logPath)), 0o755); err != nil {
+		return err
+	}
+	logFile, err := os.OpenFile(expand(cfg.logPath), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	args := []string{"daemon", "serve"}
+	if filepath.Base(cfg.self) == "wispd" {
+		args = []string{"serve"}
+	}
+	cmd := exec.Command(cfg.self, args...)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	if err := cmd.Start(); err != nil {
+		_ = logFile.Close()
+		return err
+	}
+	_ = logFile.Close()
+	return nil
+}
+
+func serveDaemon(cfg envConfig) error {
+	if err := os.MkdirAll(filepath.Dir(expand(cfg.socketPath)), 0o700); err != nil {
+		return err
+	}
+	if _, err := os.Stat(expand(cfg.socketPath)); err == nil {
+		if pingDaemon(cfg) == nil {
+			return fmt.Errorf("wispd is already running at %s", cfg.socketPath)
+		}
+		_ = os.Remove(expand(cfg.socketPath))
+	}
+	listener, err := net.Listen("unix", expand(cfg.socketPath))
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+	defer os.Remove(expand(cfg.socketPath))
+	logLine(cfg, "wispd listening socket=%s", cfg.socketPath)
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			return err
+		}
+		go handleDaemonConn(cfg, conn)
+	}
+}
+
+func handleDaemonConn(cfg envConfig, conn net.Conn) {
+	defer conn.Close()
+	var req daemonRequest
+	if err := json.NewDecoder(conn).Decode(&req); err != nil {
+		writeDaemonResponse(conn, daemonResponse{OK: false, Message: err.Error()})
+		return
+	}
+	logLine(cfg, "wispd request op=%s args=%s action=%s", req.Op, strings.Join(req.Args, " "), req.Action)
+	var err error
+	message := "ok"
+	switch req.Op {
+	case "ping":
+		message = "pong"
+	case "reload":
+		message = "reloaded"
+	case "stop":
+		message = "stopping"
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			os.Exit(0)
+		}()
+	case "action":
+		err = launchActionDirect(cfg, req.Action)
+	case "launch":
+		err = runDirect(cfg, req.Args)
+	default:
+		err = fmt.Errorf("unknown daemon operation: %s", req.Op)
+	}
+	if err != nil {
+		writeDaemonResponse(conn, daemonResponse{OK: false, Message: err.Error()})
+		return
+	}
+	writeDaemonResponse(conn, daemonResponse{OK: true, Message: message})
+}
+
+func writeDaemonResponse(w io.Writer, resp daemonResponse) {
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func pingDaemon(cfg envConfig) error {
+	return sendDaemon(cfg, daemonRequest{Op: "ping"})
+}
+
+func sendDaemon(cfg envConfig, req daemonRequest) error {
+	conn, err := net.DialTimeout("unix", expand(cfg.socketPath), 300*time.Millisecond)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if err := json.NewEncoder(conn).Encode(req); err != nil {
+		return err
+	}
+	var resp daemonResponse
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		return err
+	}
+	if !resp.OK {
+		return errors.New(resp.Message)
+	}
+	return nil
+}
+
 func usage(cfg envConfig, w io.Writer) {
 	fmt.Fprintf(w, `Usage:
   %[1]s <command> [args...]
@@ -153,6 +386,8 @@ func usage(cfg envConfig, w io.Writer) {
   %[1]s action <id>
   %[1]s actions [list|init|path]
   %[1]s palette
+  %[1]s bindings [aerospace|hyprland]
+  %[1]s daemon [start|serve|status|stop|reload]
   %[1]s doctor
   %[1]s rules [aerospace|hyprland]
 
@@ -165,6 +400,8 @@ Environment:
   WISP_BACKEND  Backend override: auto, aerospace, hyprland, kitty.
   WISP_ACTIONS_PATH  Action catalog path. Defaults to ~/.config/wisp/actions.toml.
   WISP_LOG_PATH  Log path for palette actions. Defaults to ~/.cache/wisp/wisp.log.
+  WISP_SOCKET_PATH  Unix socket for wispd. Defaults to $XDG_RUNTIME_DIR/wispd.sock or /tmp/wisp-$UID/wispd.sock.
+  WISP_NO_DAEMON  Run client commands directly without contacting/autostarting wispd.
 `, cfg.command)
 }
 
@@ -383,7 +620,7 @@ func actionsCommand(cfg envConfig, args []string) error {
 			if kind == "" {
 				kind = "summon"
 			}
-			fmt.Printf("%s\t%s\t%s\n", a.ID, title, kind)
+			fmt.Printf("%s\t%s\t%s\t%s\n", a.ID, title, kind, a.Key)
 		}
 		return nil
 	case "init":
@@ -489,11 +726,7 @@ func paletteBody(cfg envConfig) error {
 	actionID := strings.SplitN(selection, "\t", 2)[0]
 	logLine(cfg, "palette selected action=%s", actionID)
 	logLine(cfg, "palette launching action=%s", actionID)
-	inv, err := invocationFromAction(cfg, actionID)
-	if err != nil {
-		return err
-	}
-	return launchInvocation(cfg, inv)
+	return run(cfg, []string{"action", actionID})
 }
 
 func doctor(cfg envConfig) error {
@@ -521,6 +754,12 @@ func doctor(cfg envConfig) error {
 		fmt.Printf("  actions: missing (%s)\n", cfg.actionsPath)
 	}
 	fmt.Printf("  log: %s\n", cfg.logPath)
+	fmt.Printf("  socket: %s\n", cfg.socketPath)
+	if pingDaemon(cfg) == nil {
+		fmt.Println("  daemon: running")
+	} else {
+		fmt.Println("  daemon: not running")
+	}
 	if _, err := exec.LookPath("fzf"); err == nil {
 		fmt.Println("  fzf: ok")
 	} else {
@@ -551,6 +790,50 @@ on-window-detected = [
 # Override the special workspace name with WISP_HYPRLAND_WORKSPACE.`)
 	default:
 		return fmt.Errorf("unknown rules backend: %s", backend)
+	}
+	return nil
+}
+
+func bindings(cfg envConfig, backend string) error {
+	actions, err := loadActions(cfg.actionsPath)
+	if err != nil {
+		return err
+	}
+	switch backend {
+	case "aerospace":
+		fmt.Println(`# Wisp prefix bindings for Aerospace.
+# Add this to ~/.aerospace.toml, then reload Aerospace.
+[mode.main.binding]
+alt-space = 'mode wisp'
+
+[mode.wisp.binding]
+esc = 'mode main'
+space = ['exec-and-forget wisp palette', 'mode main']`)
+		for _, a := range actions {
+			key := strings.ToLower(strings.TrimSpace(a.Key))
+			if key == "" || a.ID == "" {
+				continue
+			}
+			fmt.Printf("%s = ['exec-and-forget wisp action %s', 'mode main']\n", key, a.ID)
+		}
+	case "hyprland":
+		fmt.Println(`# Wisp prefix bindings for Hyprland.
+# Add this to hyprland.conf, then reload Hyprland.
+bind = ALT, SPACE, submap, wisp
+
+submap = wisp
+bind = , ESCAPE, submap, reset
+bind = , SPACE, exec, wisp palette`)
+		for _, a := range actions {
+			key := strings.ToUpper(strings.TrimSpace(a.Key))
+			if key == "" || a.ID == "" {
+				continue
+			}
+			fmt.Printf("bind = , %s, exec, wisp action %s\n", key, a.ID)
+		}
+		fmt.Println("submap = reset")
+	default:
+		return fmt.Errorf("unknown bindings backend: %s", backend)
 	}
 	return nil
 }
@@ -733,24 +1016,28 @@ func sampleActions() string {
 id = "scratch"
 title = "Scratch Notes"
 kind = "summon"
+key = "s"
 command = ["nvim", "~/Projects/darkness/introspection/scratch.md"]
 
 [[action]]
 id = "aero"
 title = "Aerospace Manager"
 kind = "summon"
+key = "a"
 command = ["zsh", "-lc", "aeros"]
 
 [[action]]
 id = "kpm"
 title = "Maintain Panes"
 kind = "summon"
+key = "k"
 command = ["kpm"]
 
 [[action]]
 id = "terminal"
 title = "Floating Terminal"
 kind = "shell"
+key = "t"
 command = []
 `
 }
@@ -774,6 +1061,13 @@ func homeDir() string {
 		return home
 	}
 	return os.Getenv("HOME")
+}
+
+func runtimeDir() string {
+	if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
+		return dir
+	}
+	return filepath.Join(os.TempDir(), fmt.Sprintf("wisp-%d", os.Getuid()))
 }
 
 func displayPathForUser(path string) string {

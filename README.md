@@ -57,10 +57,17 @@ wisp actions list
 wisp action scratch
 wisp palette
 
+# Daemon-backed action/session control.
+wisp daemon start
+wisp daemon status
+wispd status
+
 # Diagnostics and window-manager rule snippets.
 wisp doctor
 wisp rules aerospace
 wisp rules hyprland
+wisp bindings aerospace
+wisp bindings hyprland
 ```
 
 Legacy `wisp <command> [args...]` and `wisp --terminal` remain supported.
@@ -86,6 +93,7 @@ Example action:
 id = "scratch"
 title = "Scratch Notes"
 kind = "summon"
+key = "s"
 command = ["nvim", "~/Projects/darkness/introspection/scratch.md"]
 ```
 
@@ -110,9 +118,49 @@ wisp palette
 ```
 
 `wisp palette` launches a Wisp surface running `fzf`; selecting an action runs
-`wisp action <id>` as a detached process. A window manager can bind a global key to `wisp palette`,
+`wisp action <id>`. A window manager can bind a global key to `wisp palette`,
 making Wisp the command palette while the window manager only handles key capture.
-Detached palette action output is appended to `~/.cache/wisp/wisp.log` by default.
+When `wispd` is available, client commands auto-start it and delegate action
+execution over a local Unix socket. Daemon output is appended to
+`~/.cache/wisp/wisp.log` by default.
+
+## Daemon and prefix bindings
+
+Wisp uses a split architecture for modal hotkeys:
+
+```text
+window manager/compositor captures Option+Space or Alt+Space
+  -> wisp client opens palette or sends an action request
+  -> wispd daemon executes/focuses/summons the surface
+```
+
+Start or inspect the daemon with:
+
+```bash
+wisp daemon start
+wisp daemon status
+wisp daemon stop
+
+# If installed through ./install.sh, wispd is also available as a symlink.
+wispd status
+```
+
+Client launches auto-start `wispd` by default. Disable daemon delegation with:
+
+```bash
+WISP_NO_DAEMON=1 wisp action scratch
+```
+
+Actions can define a `key` used by binding generators. Generate snippets with:
+
+```bash
+wisp bindings aerospace
+wisp bindings hyprland
+```
+
+For macOS/Aerospace this emits an `alt-space` Wisp mode. For Linux/Hyprland this
+emits an `ALT+SPACE` submap. In both cases, `Space` opens the palette and action
+keys run `wisp action <id>`.
 
 ## Surface identity
 
@@ -156,6 +204,12 @@ on-window-detected = [
 
 Wisp still keeps a best-effort post-launch `aerospace layout floating` fallback for compatibility.
 
+Prefix-key bindings can be generated with:
+
+```bash
+wisp bindings aerospace
+```
+
 ## Hyprland
 
 When `HYPRLAND_INSTANCE_SIGNATURE` and `hyprctl` are available, Wisp uses the
@@ -173,8 +227,13 @@ WISP_HYPRLAND_WORKSPACE=scratch wisp summon scratch -- nvim ~/scratch.md
 ```
 
 Named `summon` surfaces try to focus an existing matching `wisp:<id>:` window
-before creating a new one. The Hyprland lookup uses `python3` to parse
-`hyprctl -j clients`.
+before creating a new one. The Hyprland lookup parses `hyprctl -j clients`.
+
+Prefix-key submap bindings can be generated with:
+
+```bash
+wisp bindings hyprland
+```
 
 ## Environment
 
@@ -189,6 +248,9 @@ before creating a new one. The Hyprland lookup uses `python3` to parse
 | `WISP_HYPRLAND_WORKSPACE` | Hyprland special workspace name; defaults to `wisp` |
 | `WISP_ACTIONS_PATH` | Action catalog path; defaults to `~/.config/wisp/actions.toml` |
 | `WISP_LOG_PATH` | Log path for palette actions; defaults to `~/.cache/wisp/wisp.log` |
+| `WISP_SOCKET_PATH` | Unix socket for `wispd`; defaults to `$XDG_RUNTIME_DIR/wispd.sock` or `/tmp/wisp-$UID/wispd.sock` |
+| `WISP_NO_DAEMON` | Run client commands directly without contacting or autostarting `wispd` |
+| `WISP_DAEMON_AUTOSTART` | Set to `0` to prevent client commands from starting `wispd` |
 
 ## Dependencies
 
