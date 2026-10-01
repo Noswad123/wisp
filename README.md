@@ -1,5 +1,7 @@
 # wisp
 
+![Wisp](img/wisp.png)
+
 `wisp` opens a command in a floating utility surface.
 
 It is part of the Jamal Arcana ecosystem, but it is intentionally generic: `wisp` presents whatever command it receives and does not know about any specific companion tool. Window-manager integration should key off Wisp's stable surface identity instead of guessing that an arbitrary terminal window is special.
