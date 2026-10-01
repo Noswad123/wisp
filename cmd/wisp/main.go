@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +25,7 @@ type action struct {
 	Title   string   `toml:"title"`
 	Kind    string   `toml:"kind"`
 	Key     string   `toml:"key"`
+	Layout  string   `toml:"layout"`
 	Command []string `toml:"command"`
 }
 
@@ -54,6 +56,7 @@ type invocation struct {
 	OriginalArgs []string
 	WindowTitle  string
 	SurfaceID    string
+	Layout       string
 }
 
 type envConfig struct {
@@ -66,6 +69,7 @@ type envConfig struct {
 	cacheHome         string
 	logPath           string
 	socketPath        string
+	hintPIDPath       string
 	self              string
 	kittyInitialWidth string
 	kittyInitialHt    string
@@ -105,6 +109,7 @@ func loadEnv() envConfig {
 		cacheHome:         cacheHome,
 		logPath:           envDefault("WISP_LOG_PATH", filepath.Join(cacheHome, "wisp.log")),
 		socketPath:        envDefault("WISP_SOCKET_PATH", filepath.Join(runtimeDir(), "wispd.sock")),
+		hintPIDPath:       envDefault("WISP_HINT_PID_PATH", filepath.Join(runtimeDir(), "wisp-hint.pid")),
 		self:              envDefault("WISP_SELF", self),
 		kittyInitialWidth: envDefault("WISP_KITTY_WIDTH", "70c"),
 		kittyInitialHt:    envDefault("WISP_KITTY_HEIGHT", "38c"),
@@ -152,6 +157,8 @@ func runDirect(cfg envConfig, args []string) error {
 			backend = args[1]
 		}
 		return bindings(cfg, backend)
+	case "hint":
+		return hintCommand(cfg, args[1:])
 	case "actions":
 		return actionsCommand(cfg, args[1:])
 	case "_palette":
@@ -191,7 +198,7 @@ func shouldDelegate(args []string) bool {
 	switch args[0] {
 	case "action", "summon", "shell", "run", "palette", "-t", "--terminal":
 		return true
-	case "daemon", "doctor", "rules", "bindings", "actions", "_palette", "_launch_action", "-h", "--help", "help":
+	case "daemon", "doctor", "rules", "bindings", "hint", "actions", "_palette", "_launch_action", "-h", "--help", "help":
 		return false
 	default:
 		return true
@@ -387,6 +394,7 @@ func usage(cfg envConfig, w io.Writer) {
   %[1]s actions [list|init|path]
   %[1]s palette
   %[1]s bindings [aerospace|hyprland]
+  %[1]s hint [show|close|text]
   %[1]s daemon [start|serve|status|stop|reload]
   %[1]s doctor
   %[1]s rules [aerospace|hyprland]
@@ -396,6 +404,7 @@ Environment:
   WISP_TITLE    Human title label. Wisp prefixes non-wisp titles as wisp:<id>: <label>.
   WISP_DIR      Working directory override.
   WISP_PATH     Path used to infer title and working directory.
+  WISP_LAYOUT   Surface layout hint: floating or fullscreen.
   WISP_SHELL    Shell for --terminal/shell. Defaults to SHELL, then /bin/zsh.
   WISP_BACKEND  Backend override: auto, aerospace, hyprland, kitty.
   WISP_ACTIONS_PATH  Action catalog path. Defaults to ~/.config/wisp/actions.toml.
@@ -412,6 +421,7 @@ func parseInvocation(cfg envConfig, args []string) (invocation, error) {
 		Title:      os.Getenv("WISP_TITLE"),
 		TargetPath: os.Getenv("WISP_PATH"),
 		WorkDir:    os.Getenv("WISP_DIR"),
+		Layout:     os.Getenv("WISP_LAYOUT"),
 	}
 
 	switch args[0] {
@@ -508,7 +518,9 @@ func launchInvocation(cfg envConfig, inv invocation) error {
 		if err := launchMacKitty(cfg, inv); err != nil {
 			return err
 		}
-		go postLaunchAerospaceFloat(inv.WindowTitle)
+		if inv.Layout != "fullscreen" {
+			go postLaunchAerospaceFloat(inv.WindowTitle)
+		}
 		return nil
 	case "hyprland":
 		if focusExistingHyprland(inv) {
@@ -565,6 +577,16 @@ func resolveInvocation(cfg envConfig, inv *invocation) error {
 	}
 	if st, err := os.Stat(inv.WorkDir); err != nil || !st.IsDir() {
 		return fmt.Errorf("working directory does not exist: %s", inv.WorkDir)
+	}
+
+	inv.Layout = strings.ToLower(strings.TrimSpace(inv.Layout))
+	if inv.Layout == "" {
+		inv.Layout = "floating"
+	}
+	switch inv.Layout {
+	case "floating", "fullscreen":
+	default:
+		return fmt.Errorf("unsupported layout: %s", inv.Layout)
 	}
 
 	label := inv.Command
@@ -660,7 +682,7 @@ func invocationFromAction(cfg envConfig, id string) (invocation, error) {
 		if title == "" {
 			title = a.ID
 		}
-		inv := invocation{Mode: kind, ID: a.ID, Title: title}
+		inv := invocation{Mode: kind, ID: a.ID, Title: title, Layout: a.Layout}
 		if kind == "shell" {
 			inv.TerminalMode = true
 			inv.Command = cfg.shell
@@ -794,6 +816,159 @@ on-window-detected = [
 	return nil
 }
 
+func hintCommand(cfg envConfig, args []string) error {
+	sub := "show"
+	if len(args) > 0 {
+		sub = args[0]
+	}
+	switch sub {
+	case "show":
+		return hint(cfg)
+	case "close":
+		return closeHint(cfg)
+	case "text":
+		fmt.Println(hintText(cfg))
+		return nil
+	default:
+		return fmt.Errorf("unknown hint command: %s", sub)
+	}
+}
+
+func hint(cfg envConfig) error {
+	text := hintText(cfg)
+	if err := showHint(cfg, text); err != nil {
+		fmt.Println(text)
+		return err
+	}
+	return nil
+}
+
+func hintMessage(cfg envConfig) string {
+	return strings.ReplaceAll(hintText(cfg), "\n", " · ")
+}
+
+func hintText(cfg envConfig) string {
+	actions, err := loadActions(cfg.actionsPath)
+	if err != nil {
+		return "Wisp\nesc  cancel"
+	}
+	rows := []struct {
+		key   string
+		label string
+	}{}
+	for _, a := range actions {
+		key := strings.TrimSpace(a.Key)
+		if key == "" || a.ID == "" {
+			continue
+		}
+		label := a.Title
+		if label == "" {
+			label = a.ID
+		}
+		rows = append(rows, struct {
+			key   string
+			label string
+		}{key: key, label: label})
+	}
+	rows = append(rows, struct {
+		key   string
+		label string
+	}{key: "esc", label: "cancel"})
+
+	maxKey := 0
+	for _, row := range rows {
+		if len(row.key) > maxKey {
+			maxKey = len(row.key)
+		}
+	}
+	var b strings.Builder
+	b.WriteString("Wisp\n")
+	for i, row := range rows {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		fmt.Fprintf(&b, "%-*s  %s", maxKey, row.key, row.label)
+	}
+	return b.String()
+}
+
+func showHint(cfg envConfig, text string) error {
+	_ = closeHint(cfg)
+	switch os.Getenv("WISP_HINT_BACKEND") {
+	case "stdout":
+		fmt.Println(text)
+		return nil
+	case "notification":
+		return notify(cfg, hintMessage(cfg))
+	}
+	if command := os.Getenv("WISP_HINT_COMMAND"); command != "" {
+		cmd := exec.Command("/bin/sh", "-lc", command)
+		cmd.Stdin = strings.NewReader(text)
+		if err := cmd.Start(); err != nil {
+			return err
+		}
+		return writeHintPID(cfg, cmd.Process.Pid)
+	}
+	if runtime.GOOS == "darwin" {
+		if helper, err := findHintHelper(cfg); err == nil {
+			cmd := exec.Command(helper)
+			cmd.Env = append(os.Environ(), "WISP_HINT_TEXT="+text)
+			if err := cmd.Start(); err != nil {
+				return err
+			}
+			return writeHintPID(cfg, cmd.Process.Pid)
+		}
+	}
+	if hyprlandAvailable() {
+		return exec.Command("hyprctl", "notify", "1", "1800", "rgb(7aa2f7)", hintMessage(cfg)).Run()
+	}
+	return notify(cfg, hintMessage(cfg))
+}
+
+func writeHintPID(cfg envConfig, pid int) error {
+	if err := os.MkdirAll(filepath.Dir(expand(cfg.hintPIDPath)), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(expand(cfg.hintPIDPath), []byte(strconv.Itoa(pid)), 0o644)
+}
+
+func closeHint(cfg envConfig) error {
+	data, err := os.ReadFile(expand(cfg.hintPIDPath))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	_ = os.Remove(expand(cfg.hintPIDPath))
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		return nil
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return nil
+	}
+	_ = proc.Kill()
+	return nil
+}
+
+func findHintHelper(cfg envConfig) (string, error) {
+	if helper := os.Getenv("WISP_HINT_HELPER"); helper != "" {
+		return findExecutable(helper)
+	}
+	selfDir := filepath.Dir(cfg.self)
+	for _, candidate := range []string{
+		filepath.Join(selfDir, "wisp-hint-macos"),
+		"wisp-hint-macos",
+	} {
+		if path, err := findExecutable(candidate); err == nil {
+			return path, nil
+		}
+	}
+	return "", errors.New("wisp-hint-macos was not found")
+}
+
 func bindings(cfg envConfig, backend string) error {
 	actions, err := loadActions(cfg.actionsPath)
 	if err != nil {
@@ -804,32 +979,34 @@ func bindings(cfg envConfig, backend string) error {
 		fmt.Println(`# Wisp prefix bindings for Aerospace.
 # Add this to ~/.aerospace.toml, then reload Aerospace.
 [mode.main.binding]
-alt-space = 'mode wisp'
+alt-space = ['exec-and-forget wisp hint show', 'mode wisp']
 
 [mode.wisp.binding]
-esc = 'mode main'
-space = ['exec-and-forget wisp palette', 'mode main']`)
+esc = ['exec-and-forget wisp hint close', 'mode main']
+space = ['exec-and-forget wisp hint close', 'exec-and-forget wisp palette', 'mode main']`)
 		for _, a := range actions {
 			key := strings.ToLower(strings.TrimSpace(a.Key))
 			if key == "" || a.ID == "" {
 				continue
 			}
-			fmt.Printf("%s = ['exec-and-forget wisp action %s', 'mode main']\n", key, a.ID)
+			fmt.Printf("%s = ['exec-and-forget wisp hint close', 'exec-and-forget wisp action %s', 'mode main']\n", key, a.ID)
 		}
 	case "hyprland":
 		fmt.Println(`# Wisp prefix bindings for Hyprland.
 # Add this to hyprland.conf, then reload Hyprland.
+bind = ALT, SPACE, exec, wisp hint show
 bind = ALT, SPACE, submap, wisp
 
 submap = wisp
+bind = , ESCAPE, exec, wisp hint close
 bind = , ESCAPE, submap, reset
-bind = , SPACE, exec, wisp palette`)
+bind = , SPACE, exec, sh -lc 'wisp hint close; wisp palette'`)
 		for _, a := range actions {
 			key := strings.ToUpper(strings.TrimSpace(a.Key))
 			if key == "" || a.ID == "" {
 				continue
 			}
-			fmt.Printf("bind = , %s, exec, wisp action %s\n", key, a.ID)
+			fmt.Printf("bind = , %s, exec, sh -lc 'wisp hint close; wisp action %s'\n", key, a.ID)
 		}
 		fmt.Println("submap = reset")
 	default:
@@ -859,7 +1036,7 @@ func launchMacKitty(cfg envConfig, inv invocation) error {
 	if !hasKitty() {
 		return errors.New("kitty was not found")
 	}
-	inner := `work_dir="$1"; wisp_id="$2"; wisp_role="$3"; wisp_title="$4"; shift 4; cd -- "$work_dir" && export WISP=1 WISP_ID="$wisp_id" WISP_ROLE="$wisp_role" WISP_TITLE="$wisp_title"; if command -v aerospace >/dev/null 2>&1; then aerospace layout floating >/dev/null 2>&1 || true; fi; exec "$@"`
+	inner := `work_dir="$1"; wisp_id="$2"; wisp_role="$3"; wisp_title="$4"; wisp_layout="$5"; shift 5; cd -- "$work_dir" && export WISP=1 WISP_ID="$wisp_id" WISP_ROLE="$wisp_role" WISP_TITLE="$wisp_title" WISP_LAYOUT="$wisp_layout"; if command -v aerospace >/dev/null 2>&1; then if [ "$wisp_layout" = fullscreen ]; then sleep 0.2; aerospace fullscreen >/dev/null 2>&1 || true; else aerospace layout floating >/dev/null 2>&1 || true; fi; fi; exec "$@"`
 	args := []string{"-na", "kitty", "--args",
 		"--detach=no", "--single-instance=no",
 		"--override", "macos_quit_when_last_window_closed=yes",
@@ -869,7 +1046,7 @@ func launchMacKitty(cfg envConfig, inv invocation) error {
 		"--override", "initial_window_width=" + cfg.kittyInitialWidth,
 		"--override", "initial_window_height=" + cfg.kittyInitialHt,
 		"/bin/zsh", "-lc", inner,
-		"wisp", inv.WorkDir, inv.SurfaceID, inv.Mode, inv.WindowTitle,
+		"wisp", inv.WorkDir, inv.SurfaceID, inv.Mode, inv.WindowTitle, inv.Layout,
 	}
 	args = append(args, inv.OriginalArgs...)
 	cmd := exec.Command("open", args...)
@@ -877,8 +1054,8 @@ func launchMacKitty(cfg envConfig, inv invocation) error {
 }
 
 func launchFallbackKitty(inv invocation) error {
-	inner := `export WISP=1 WISP_ID="$1" WISP_ROLE="$2" WISP_TITLE="$3"; shift 3; exec "$@"`
-	args := []string{"--title", inv.WindowTitle, "--working-directory", inv.WorkDir, "/bin/sh", "-lc", inner, "sh", inv.SurfaceID, inv.Mode, inv.WindowTitle}
+	inner := `export WISP=1 WISP_ID="$1" WISP_ROLE="$2" WISP_TITLE="$3" WISP_LAYOUT="$4"; shift 4; exec "$@"`
+	args := []string{"--title", inv.WindowTitle, "--working-directory", inv.WorkDir, "/bin/sh", "-lc", inner, "sh", inv.SurfaceID, inv.Mode, inv.WindowTitle, inv.Layout}
 	args = append(args, inv.OriginalArgs...)
 	cmd := exec.Command("kitty", args...)
 	return cmd.Start()
@@ -888,10 +1065,13 @@ func launchHyprlandKitty(cfg envConfig, inv invocation) error {
 	if !hyprlandAvailable() {
 		return errors.New("Hyprland backend requested, but hyprctl/HYPRLAND_INSTANCE_SIGNATURE is not available")
 	}
-	inner := `work_dir="$1"; wisp_id="$2"; wisp_role="$3"; wisp_title="$4"; shift 4; cd -- "$work_dir" && export WISP=1 WISP_ID="$wisp_id" WISP_ROLE="$wisp_role" WISP_TITLE="$wisp_title" && exec "$@"`
-	parts := []string{"kitty", "--class", "wisp-" + inv.SurfaceID, "--title", inv.WindowTitle, "/bin/sh", "-lc", inner, "sh", inv.WorkDir, inv.SurfaceID, inv.Mode, inv.WindowTitle}
+	inner := `work_dir="$1"; wisp_id="$2"; wisp_role="$3"; wisp_title="$4"; wisp_layout="$5"; shift 5; cd -- "$work_dir" && export WISP=1 WISP_ID="$wisp_id" WISP_ROLE="$wisp_role" WISP_TITLE="$wisp_title" WISP_LAYOUT="$wisp_layout" && exec "$@"`
+	parts := []string{"kitty", "--class", "wisp-" + inv.SurfaceID, "--title", inv.WindowTitle, "/bin/sh", "-lc", inner, "sh", inv.WorkDir, inv.SurfaceID, inv.Mode, inv.WindowTitle, inv.Layout}
 	parts = append(parts, inv.OriginalArgs...)
 	rules := fmt.Sprintf("[workspace special:%s; float; size 900 600; center]", cfg.hyprWorkspace)
+	if inv.Layout == "fullscreen" {
+		rules = fmt.Sprintf("[workspace special:%s; fullscreen]", cfg.hyprWorkspace)
+	}
 	cmd := exec.Command("hyprctl", "dispatch", "exec", rules+" "+shellJoin(parts))
 	return cmd.Run()
 }
@@ -1005,10 +1185,14 @@ func logLine(cfg envConfig, format string, args ...any) {
 	fmt.Fprintf(f, "[%s] %s\n", time.Now().Format("2006-01-02 15:04:05"), fmt.Sprintf(format, args...))
 }
 
-func notify(cfg envConfig, message string) {
+func notify(cfg envConfig, message string) error {
 	if _, err := exec.LookPath("osascript"); err == nil {
-		_ = exec.Command("osascript", "-e", fmt.Sprintf("display notification %q with title %q", message, cfg.command)).Run()
+		return exec.Command("osascript", "-e", fmt.Sprintf("display notification %q with title %q", message, cfg.command)).Run()
 	}
+	if _, err := exec.LookPath("notify-send"); err == nil {
+		return exec.Command("notify-send", "Wisp mode", message).Run()
+	}
+	return errors.New("no notification command found")
 }
 
 func sampleActions() string {
@@ -1027,18 +1211,26 @@ key = "a"
 command = ["zsh", "-lc", "aeros"]
 
 [[action]]
-id = "kpm"
-title = "Maintain Panes"
-kind = "summon"
-key = "k"
-command = ["kpm"]
-
-[[action]]
 id = "terminal"
 title = "Floating Terminal"
 kind = "shell"
 key = "t"
 command = []
+
+[[action]]
+id = "waystone"
+title = "Waystone"
+kind = "summon"
+key = "w"
+command = ["waystone"]
+
+[[action]]
+id = "wyrm"
+title = "Wyrm"
+kind = "summon"
+key = "r"
+layout = "fullscreen"
+command = ["wyrm"]
 `
 }
 

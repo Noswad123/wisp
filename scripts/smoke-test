@@ -10,6 +10,9 @@ bash -n "$repo_root/completions/bash/wisp"
 zsh -n "$repo_root/completions/zsh/_wisp"
 go test ./...
 go build -o "$tmp_dir/wisp" ./cmd/wisp
+if [[ "$(uname -s)" == "Darwin" ]] && command -v swiftc >/dev/null 2>&1; then
+  swiftc -O -o "$tmp_dir/wisp-hint-macos" "$repo_root/cmd/wisp-hint-macos/main.swift"
+fi
 "$tmp_dir/wisp" --help >/dev/null
 "$tmp_dir/wisp" doctor >/dev/null
 doctor_output="$($tmp_dir/wisp doctor)"
@@ -23,6 +26,9 @@ actions_path="$(WISP_ACTIONS_PATH="$tmp_dir/actions.toml" "$tmp_dir/wisp" action
 [[ "$actions_path" == "$tmp_dir/actions.toml" ]]
 WISP_ACTIONS_PATH="$tmp_dir/actions.toml" "$tmp_dir/wisp" bindings aerospace >/dev/null
 WISP_ACTIONS_PATH="$tmp_dir/actions.toml" "$tmp_dir/wisp" bindings hyprland >/dev/null
+hint_output="$(WISP_HINT_BACKEND=stdout WISP_ACTIONS_PATH="$tmp_dir/actions.toml" "$tmp_dir/wisp" hint)"
+[[ "$hint_output" == *Wisp* && "$hint_output" == *Scratch* ]]
+WISP_HINT_PID_PATH="$tmp_dir/hint.pid" "$tmp_dir/wisp" hint close
 WISP_SOCKET_PATH="$tmp_dir/wispd.sock" WISP_LOG_PATH="$tmp_dir/wisp.log" "$tmp_dir/wisp" daemon start >/dev/null
 WISP_SOCKET_PATH="$tmp_dir/wispd.sock" WISP_LOG_PATH="$tmp_dir/wisp.log" "$tmp_dir/wisp" daemon status >/dev/null
 WISP_SOCKET_PATH="$tmp_dir/wispd.sock" WISP_LOG_PATH="$tmp_dir/wisp.log" "$tmp_dir/wisp" daemon stop >/dev/null

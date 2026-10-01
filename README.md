@@ -41,7 +41,6 @@ WISP_INSTALL_COMPLETIONS=0 ./install.sh
 ```bash
 wisp --terminal
 wisp nvim README.md
-wisp yazi ~/Downloads
 wisp waystone nvim
 
 # Explicit command form.
@@ -68,6 +67,8 @@ wisp rules aerospace
 wisp rules hyprland
 wisp bindings aerospace
 wisp bindings hyprland
+wisp hint show
+wisp hint close
 ```
 
 Legacy `wisp <command> [args...]` and `wisp --terminal` remain supported.
@@ -94,6 +95,7 @@ id = "scratch"
 title = "Scratch Notes"
 kind = "summon"
 key = "s"
+layout = "floating"
 command = ["nvim", "~/Projects/darkness/introspection/scratch.md"]
 ```
 
@@ -104,6 +106,10 @@ Supported `kind` values:
 | `summon` | Named singleton surface; focus existing if possible, otherwise launch |
 | `run` | Launch a new Wisp surface |
 | `shell` | Launch a floating shell |
+
+Actions may set `layout = "floating"` or `layout = "fullscreen"`. This is a
+backend hint; Aerospace applies it from inside the launched Kitty surface, and
+Hyprland maps fullscreen actions to a fullscreen one-shot rule.
 
 Run actions directly:
 
@@ -158,9 +164,26 @@ wisp bindings aerospace
 wisp bindings hyprland
 ```
 
-For macOS/Aerospace this emits an `alt-space` Wisp mode. For Linux/Hyprland this
-emits an `ALT+SPACE` submap. In both cases, `Space` opens the palette and action
-keys run `wisp action <id>`.
+For macOS/Aerospace this emits an `alt-space` Wisp mode and a hint. For
+Linux/Hyprland this emits an `ALT+SPACE` submap and a hint. In both cases,
+action keys run `wisp action <id>`; `Space` still opens the palette, but the
+hint only shows direct keyed actions to avoid duplicating the palette contents.
+
+On macOS, `./install.sh` also installs `wisp-hint-macos` when `swiftc` is
+available. `wisp hint show` uses a native non-activating Hexware floater before
+falling back to notifications. The floater stays up until `wisp hint close`
+runs, which generated prefix bindings do on action selection or `Esc`. Control
+the floater with:
+
+| Variable | Purpose |
+| --- | --- |
+| `WISP_HINT_POSITION` | `top-center` default, `center`, `top-left`, `top-right`, `bottom-left`, `bottom-center`, `bottom-right` |
+| `WISP_HINT_DURATION` | Optional seconds before auto-dismiss; default `0` means stay open until closed |
+| `WISP_HINT_WIDTH` | Floater width; default `760` |
+| `WISP_HINT_FONT_SIZE` | Monospace font size; default `15` |
+| `WISP_HINT_BACKEND` | `stdout` or `notification` to force a fallback backend |
+| `WISP_HINT_COMMAND` | Custom command that receives hint text on stdin |
+| `WISP_HINT_HELPER` | Override path to the macOS hint helper |
 
 ## Surface identity
 
@@ -185,6 +208,7 @@ The launched command receives:
 | `WISP_ID` | Stable Wisp surface id |
 | `WISP_ROLE` | `run`, `shell`, or `summon` |
 | `WISP_TITLE` | Full normalized Wisp title |
+| `WISP_LAYOUT` | Surface layout hint: `floating` or `fullscreen` |
 
 ## Aerospace
 
@@ -243,6 +267,7 @@ wisp bindings hyprland
 | `WISP_ID` | Stable surface id |
 | `WISP_DIR` | Override working directory |
 | `WISP_PATH` | Path used to infer title and working directory |
+| `WISP_LAYOUT` | Surface layout hint: `floating` or `fullscreen` |
 | `WISP_SHELL` | Shell used by `wisp --terminal`; defaults to `$SHELL`, then `/bin/zsh` |
 | `WISP_BACKEND` | Override backend: `auto`, `aerospace`, `hyprland`, or `kitty` |
 | `WISP_HYPRLAND_WORKSPACE` | Hyprland special workspace name; defaults to `wisp` |
@@ -251,6 +276,8 @@ wisp bindings hyprland
 | `WISP_SOCKET_PATH` | Unix socket for `wispd`; defaults to `$XDG_RUNTIME_DIR/wispd.sock` or `/tmp/wisp-$UID/wispd.sock` |
 | `WISP_NO_DAEMON` | Run client commands directly without contacting or autostarting `wispd` |
 | `WISP_DAEMON_AUTOSTART` | Set to `0` to prevent client commands from starting `wispd` |
+| `WISP_HINT_POSITION` | Position for the macOS hint floater; defaults to `top-center` |
+| `WISP_HINT_DURATION` | Optional hint floater duration in seconds; defaults to `0`/sticky |
 
 ## Dependencies
 
@@ -259,6 +286,7 @@ wisp bindings hyprland
 - optional: fzf, for `wisp palette`
 - optional: Aerospace, for rule-based floating and named-surface focusing
 - optional: Hyprland + `hyprctl`, for Linux special-workspace surfaces
+- optional: Swift toolchain on macOS, for building the native hint floater
 - Go, for building from source
 
 ## License
