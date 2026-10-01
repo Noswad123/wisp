@@ -8,7 +8,10 @@ bash_completion_dir="${WISP_BASH_COMPLETION_DIR:-$HOME/.local/share/bash-complet
 install_completions="${WISP_INSTALL_COMPLETIONS:-1}"
 
 mkdir -p "$bin_dir"
-install -m 0755 "$repo_root/bin/wisp" "$bin_dir/wisp"
+tmp_bin="$(mktemp "${TMPDIR:-/tmp}/wisp.XXXXXX")"
+trap 'rm -f "$tmp_bin"' EXIT
+(cd "$repo_root" && go build -o "$tmp_bin" ./cmd/wisp)
+install -m 0755 "$tmp_bin" "$bin_dir/wisp"
 printf 'installed wisp -> %s/wisp\n' "$bin_dir"
 
 if [[ "$install_completions" != "0" ]]; then

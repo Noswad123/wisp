@@ -10,6 +10,9 @@ It is part of the Jamal Arcana ecosystem, but it is intentionally generic: `wisp
 ./install.sh
 ```
 
+The installer builds the Go CLI from `./cmd/wisp` and installs the resulting
+binary.
+
 By default this installs to `~/.local/bin`. Override with:
 
 ```bash
@@ -183,16 +186,16 @@ before creating a new one. The Hyprland lookup uses `python3` to parse
 | `WISP_BACKEND` | Override backend: `auto`, `aerospace`, `hyprland`, or `kitty` |
 | `WISP_HYPRLAND_WORKSPACE` | Hyprland special workspace name; defaults to `wisp` |
 | `WISP_ACTIONS_PATH` | Action catalog path; defaults to `~/.config/wisp/actions.toml` |
-| `WISP_LOG_PATH` | Log path for detached palette actions; defaults to `~/.cache/wisp/wisp.log` |
+| `WISP_LOG_PATH` | Log path for palette actions; defaults to `~/.cache/wisp/wisp.log` |
 
 ## Dependencies
 
 - macOS `open`
 - kitty
-- python3, for action catalog parsing
 - optional: fzf, for `wisp palette`
 - optional: Aerospace, for rule-based floating and named-surface focusing
-- optional: Hyprland + `hyprctl` + `python3`, for Linux special-workspace surfaces
+- optional: Hyprland + `hyprctl`, for Linux special-workspace surfaces
+- Go, for building from source
 
 ## License
 
