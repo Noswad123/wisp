@@ -73,6 +73,20 @@ wisp hint close
 
 Legacy `wisp <command> [args...]` and `wisp --terminal` remain supported.
 
+### Hyprland compatibility
+
+Runtime launches (including the palette) and summon focus/toggle operations support
+both legacy Hyprlang and Lua configuration providers. Wisp detects the provider
+using read-only `hyprctl -j systeminfo` / `hyprctl systeminfo` queries; it does not
+probe by dispatching commands. Older versions without a provider field retain
+legacy dispatch syntax. Lua launches use `hl.dsp.exec_cmd` with a rule table;
+shell command arguments and Lua strings are quoted separately.
+
+`wisp rules hyprland` and `wisp bindings hyprland` still generate **legacy
+hyprland.conf syntax only**, not Lua configuration. Lua config/rule generation is
+deferred; do not paste those snippets into `hyprland.lua`. Runtime support does
+not require generated snippets.
+
 ## Actions and palette
 
 Wisp can also act as a small Raycast/Tuna-like launcher. Actions live in:

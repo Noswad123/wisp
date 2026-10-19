@@ -523,8 +523,8 @@ func launchInvocation(cfg envConfig, inv invocation) error {
 		}
 		return nil
 	case "hyprland":
-		if focusExistingHyprland(inv) {
-			return nil
+		if focused, err := focusExistingHyprland(inv); focused || err != nil {
+			return err
 		}
 		return launchHyprlandKitty(cfg, inv)
 	case "kitty":
@@ -920,7 +920,8 @@ func showHint(cfg envConfig, text string) error {
 		}
 	}
 	if hyprlandAvailable() {
-		return exec.Command("hyprctl", "notify", "1", "1800", "rgb(7aa2f7)", hintMessage(cfg)).Run()
+		_, err := hyprctlOutput("notify", "1", "1800", "rgb(7aa2f7)", hintMessage(cfg))
+		return err
 	}
 	return notify(cfg, hintMessage(cfg))
 }
@@ -1065,6 +1066,10 @@ func launchHyprlandKitty(cfg envConfig, inv invocation) error {
 	if !hyprlandAvailable() {
 		return errors.New("Hyprland backend requested, but hyprctl/HYPRLAND_INSTANCE_SIGNATURE is not available")
 	}
+	lua, err := hyprlandLuaProvider()
+	if err != nil {
+		return err
+	}
 	inner := `work_dir="$1"; wisp_id="$2"; wisp_role="$3"; wisp_title="$4"; wisp_layout="$5"; shift 5; cd -- "$work_dir" && export WISP=1 WISP_ID="$wisp_id" WISP_ROLE="$wisp_role" WISP_TITLE="$wisp_title" WISP_LAYOUT="$wisp_layout" && exec "$@"`
 	parts := []string{"kitty", "--class", "wisp-" + inv.SurfaceID, "--title", inv.WindowTitle, "/bin/sh", "-lc", inner, "sh", inv.WorkDir, inv.SurfaceID, inv.Mode, inv.WindowTitle, inv.Layout}
 	parts = append(parts, inv.OriginalArgs...)
@@ -1072,8 +1077,106 @@ func launchHyprlandKitty(cfg envConfig, inv invocation) error {
 	if inv.Layout == "fullscreen" {
 		rules = fmt.Sprintf("[workspace special:%s; fullscreen]", cfg.hyprWorkspace)
 	}
-	cmd := exec.Command("hyprctl", "dispatch", "exec", rules+" "+shellJoin(parts))
-	return cmd.Run()
+	luaRules := "{workspace = " + luaQuote("special:"+cfg.hyprWorkspace)
+	if inv.Layout == "fullscreen" {
+		luaRules += ", fullscreen = true}"
+	} else {
+		luaRules += ", float = true, size = {900, 600}, center = true}"
+	}
+	return hyprlandDispatch(lua, "exec", rules+" "+shellJoin(parts), "hl.dsp.exec_cmd("+luaQuote(shellJoin(parts))+", "+luaRules+")")
+}
+
+// Detection is read-only, never a trial dispatch. Some versions ignore -j for
+// systeminfo and return text; older legacy versions have no provider field.
+func hyprlandLuaProvider() (bool, error) {
+	out, jsonErr := hyprctlOutput("-j", "systeminfo")
+	if jsonErr == nil {
+		if provider := hyprlandProvider(out); provider != "" {
+			return isLuaProvider(provider)
+		}
+	}
+	out, err := hyprctlOutput("systeminfo")
+	if err != nil {
+		if jsonErr != nil {
+			return false, fmt.Errorf("detect Hyprland config provider: %v; %w", jsonErr, err)
+		}
+		return false, fmt.Errorf("detect Hyprland config provider: %w", err)
+	}
+	provider := hyprlandProvider(out)
+	if provider == "" {
+		return false, nil // Pre-provider Hyprland uses legacy dispatch syntax.
+	}
+	return isLuaProvider(provider)
+}
+
+func hyprlandProvider(out []byte) string {
+	var info struct {
+		Provider string `json:"configProvider"`
+		State    struct {
+			Provider string `json:"configProvider"`
+		} `json:"state"`
+	}
+	if json.Unmarshal(out, &info) == nil {
+		if info.Provider != "" {
+			return info.Provider
+		}
+		return info.State.Provider
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if value, ok := strings.CutPrefix(strings.TrimSpace(line), "configProvider:"); ok {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func isLuaProvider(provider string) (bool, error) {
+	switch strings.ToLower(provider) {
+	case "lua":
+		return true, nil
+	case "legacy", "hyprlang":
+		return false, nil
+	default:
+		return false, fmt.Errorf("unsupported Hyprland config provider: %q", provider)
+	}
+}
+
+func hyprctlOutput(args ...string) ([]byte, error) {
+	out, err := exec.Command("hyprctl", args...).CombinedOutput()
+	if err != nil {
+		return out, fmt.Errorf("hyprctl %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return out, nil
+}
+
+func hyprlandDispatch(lua bool, name, arg, expression string) error {
+	args := []string{"dispatch", name, arg}
+	if lua {
+		args = []string{"dispatch", expression}
+	}
+	_, err := hyprctlOutput(args...)
+	return err
+}
+
+// Lua strings are not shell strings (nor Go/JSON strings). Fixed-width decimal
+// escapes safely encode control bytes without consuming following digits.
+func luaQuote(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '"' || c == '\\':
+			b.WriteByte('\\')
+			b.WriteByte(c)
+		case c < 32 || c == 127:
+			fmt.Fprintf(&b, "\\%03d", c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 func focusExistingAerospace(inv invocation) bool {
@@ -1102,13 +1205,13 @@ func focusExistingAerospace(inv invocation) bool {
 	return false
 }
 
-func focusExistingHyprland(inv invocation) bool {
+func focusExistingHyprland(inv invocation) (bool, error) {
 	if inv.Mode != "summon" || !hyprlandAvailable() {
-		return false
+		return false, nil
 	}
-	out, err := exec.Command("hyprctl", "-j", "clients").Output()
+	out, err := hyprctlOutput("-j", "clients")
 	if err != nil {
-		return false
+		return false, err
 	}
 	var clients []struct {
 		Address   string `json:"address"`
@@ -1117,23 +1220,39 @@ func focusExistingHyprland(inv invocation) bool {
 			Name string `json:"name"`
 		} `json:"workspace"`
 	}
-	if json.Unmarshal(out, &clients) != nil {
-		return false
+	if err := json.Unmarshal(out, &clients); err != nil {
+		return false, fmt.Errorf("decode hyprctl clients: %w", err)
 	}
 	prefix := "wisp:" + inv.SurfaceID + ":"
 	for _, client := range clients {
 		if !strings.HasPrefix(client.Title, prefix) || client.Address == "" {
 			continue
 		}
-		if exec.Command("hyprctl", "dispatch", "focuswindow", "address:"+client.Address).Run() == nil {
-			return true
+		lua, err := hyprlandLuaProvider()
+		if err != nil {
+			return false, err
+		}
+		selector := "address:" + client.Address
+		focus := func() error {
+			return hyprlandDispatch(lua, "focuswindow", selector, "hl.dsp.focus({window = "+luaQuote(selector)+"})")
+		}
+		focusErr := focus()
+		if focusErr == nil {
+			return true, nil
 		}
 		if strings.HasPrefix(client.Workspace.Name, "special:") {
-			_ = exec.Command("hyprctl", "dispatch", "togglespecialworkspace", strings.TrimPrefix(client.Workspace.Name, "special:")).Run()
-			return exec.Command("hyprctl", "dispatch", "focuswindow", "address:"+client.Address).Run() == nil
+			name := strings.TrimPrefix(client.Workspace.Name, "special:")
+			if err := hyprlandDispatch(lua, "togglespecialworkspace", name, "hl.dsp.workspace.toggle_special("+luaQuote(name)+")"); err != nil {
+				return false, fmt.Errorf("%v; %w", focusErr, err)
+			}
+			if err := focus(); err != nil {
+				return false, err
+			}
+			return true, nil
 		}
+		return false, focusErr
 	}
-	return false
+	return false, nil
 }
 
 func postLaunchAerospaceFloat(title string) {
