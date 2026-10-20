@@ -22,6 +22,9 @@ if [[ "$(uname -s)" == "Darwin" ]] && command -v swiftc >/dev/null 2>&1; then
   (cd "$repo_root" && swiftc -O -o "$tmp_hint" ./cmd/wisp-hint-macos/main.swift)
   install -m 0755 "$tmp_hint" "$bin_dir/wisp-hint-macos"
   printf 'installed wisp-hint-macos -> %s/wisp-hint-macos\n' "$bin_dir"
+elif [[ "$(uname -s)" == "Linux" ]]; then
+  install -m 0755 "$repo_root/cmd/wisp-hint-linux/main.py" "$bin_dir/wisp-hint-linux"
+  printf 'installed wisp-hint-linux -> %s/wisp-hint-linux\n' "$bin_dir"
 fi
 
 if [[ "$install_completions" != "0" ]]; then

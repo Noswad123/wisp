@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -76,6 +77,14 @@ type envConfig struct {
 }
 
 func main() {
+	// Internal detached exec supervisor must also work when invoked as wispd.
+	if len(os.Args) > 1 && os.Args[1] == "_exec_supervise" {
+		if err := superviseExec(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "wisp exec supervisor: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	cfg := loadEnv()
 	if cfg.command == "wispd" {
 		if err := daemonCommand(cfg, os.Args[1:]); err != nil {
@@ -105,7 +114,7 @@ func loadEnv() envConfig {
 		backend:           envDefault("WISP_BACKEND", "auto"),
 		hyprWorkspace:     envDefault("WISP_HYPRLAND_WORKSPACE", "wisp"),
 		configHome:        configHome,
-		actionsPath:       envDefault("WISP_ACTIONS_PATH", filepath.Join(configHome, "actions.toml")),
+		actionsPath:       defaultActionsPath(runtime.GOOS, configHome),
 		cacheHome:         cacheHome,
 		logPath:           envDefault("WISP_LOG_PATH", filepath.Join(cacheHome, "wisp.log")),
 		socketPath:        envDefault("WISP_SOCKET_PATH", filepath.Join(runtimeDir(), "wispd.sock")),
@@ -166,6 +175,8 @@ func runDirect(cfg envConfig, args []string) error {
 	case "palette":
 		inv := invocation{Mode: "run", ID: "palette", Title: "Wisp Palette", Command: cfg.self, Args: []string{"_palette"}}
 		return launchInvocation(cfg, inv)
+	case "show", "hide":
+		return overlayCommand(cfg, args[0] == "show")
 	case "action":
 		if len(args) < 2 {
 			return errors.New("action requires an id")
@@ -175,7 +186,6 @@ func runDirect(cfg envConfig, args []string) error {
 		if len(args) < 2 {
 			return errors.New("_launch_action requires an id")
 		}
-		time.Sleep(200 * time.Millisecond)
 		logLine(cfg, "palette launching action=%s", args[1])
 		inv, err := invocationFromAction(cfg, args[1])
 		if err != nil {
@@ -196,7 +206,7 @@ func shouldDelegate(args []string) bool {
 		return false
 	}
 	switch args[0] {
-	case "action", "summon", "shell", "run", "palette", "-t", "--terminal":
+	case "show", "hide", "action", "summon", "shell", "run", "palette", "-t", "--terminal":
 		return true
 	case "daemon", "doctor", "rules", "bindings", "hint", "actions", "_palette", "_launch_action", "-h", "--help", "help":
 		return false
@@ -323,6 +333,7 @@ func serveDaemon(cfg envConfig) error {
 
 func handleDaemonConn(cfg envConfig, conn net.Conn) {
 	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(90 * time.Second))
 	var req daemonRequest
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
 		writeDaemonResponse(conn, daemonResponse{OK: false, Message: err.Error()})
@@ -344,6 +355,8 @@ func handleDaemonConn(cfg envConfig, conn net.Conn) {
 		}()
 	case "action":
 		err = launchActionDirect(cfg, req.Action)
+	case "show", "hide":
+		err = overlayCommand(cfg, req.Op == "show")
 	case "launch":
 		err = runDirect(cfg, req.Args)
 	default:
@@ -370,6 +383,11 @@ func sendDaemon(cfg envConfig, req daemonRequest) error {
 		return err
 	}
 	defer conn.Close()
+	timeout := 90 * time.Second
+	if req.Op == "ping" {
+		timeout = 2 * time.Second
+	}
+	_ = conn.SetDeadline(time.Now().Add(timeout))
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		return err
 	}
@@ -387,12 +405,13 @@ func usage(cfg envConfig, w io.Writer) {
 	fmt.Fprintf(w, `Usage:
   %[1]s <command> [args...]
   %[1]s --terminal
-  %[1]s run [--id ID] [--title TITLE] [--dir DIR] [--path PATH] -- <command> [args...]
+  %[1]s run [--id ID] [--title TITLE] [--dir DIR] [--path PATH] [--layout floating|fullscreen] -- <command> [args...]
   %[1]s shell [--id ID] [--title TITLE] [--dir DIR]
   %[1]s summon <id> [--title TITLE] [--dir DIR] [--path PATH] -- <command> [args...]
   %[1]s action <id>
   %[1]s actions [list|init|path]
   %[1]s palette
+  %[1]s show|hide
   %[1]s bindings [aerospace|hyprland]
   %[1]s hint [show|close|text]
   %[1]s daemon [start|serve|status|stop|reload]
@@ -404,10 +423,10 @@ Environment:
   WISP_TITLE    Human title label. Wisp prefixes non-wisp titles as wisp:<id>: <label>.
   WISP_DIR      Working directory override.
   WISP_PATH     Path used to infer title and working directory.
-  WISP_LAYOUT   Surface layout hint: floating or fullscreen.
+  WISP_LAYOUT   Surface layout hint on macOS/fallback. Linux uses --layout or action layout (default floating).
   WISP_SHELL    Shell for --terminal/shell. Defaults to SHELL, then /bin/zsh.
   WISP_BACKEND  Backend override: auto, aerospace, hyprland, kitty.
-  WISP_ACTIONS_PATH  Action catalog path. Defaults to ~/.config/wisp/actions.toml.
+  WISP_ACTIONS_PATH  Action catalog override. Linux prefers actions.linux.toml when present; otherwise actions.toml in config home.
   WISP_LOG_PATH  Log path for palette actions. Defaults to ~/.cache/wisp/wisp.log.
   WISP_SOCKET_PATH  Unix socket for wispd. Defaults to $XDG_RUNTIME_DIR/wispd.sock or /tmp/wisp-$UID/wispd.sock.
   WISP_NO_DAEMON  Run client commands directly without contacting/autostarting wispd.
@@ -422,6 +441,10 @@ func parseInvocation(cfg envConfig, args []string) (invocation, error) {
 		TargetPath: os.Getenv("WISP_PATH"),
 		WorkDir:    os.Getenv("WISP_DIR"),
 		Layout:     os.Getenv("WISP_LAYOUT"),
+	}
+	// Linux utilities do not inherit their parent's surface layout.
+	if runtime.GOOS == "linux" {
+		inv.Layout = ""
 	}
 
 	switch args[0] {
@@ -494,6 +517,12 @@ func parseOptions(inv *invocation, args []string) []string {
 				args = args[2:]
 				continue
 			}
+		case "--layout":
+			if len(args) >= 2 {
+				inv.Layout = args[1]
+				args = args[2:]
+				continue
+			}
 		}
 		return args
 	}
@@ -503,6 +532,9 @@ func parseOptions(inv *invocation, args []string) []string {
 func launchInvocation(cfg envConfig, inv invocation) error {
 	if err := resolveInvocation(cfg, &inv); err != nil {
 		return err
+	}
+	if inv.Mode == "exec" {
+		return launchExec(cfg, inv)
 	}
 
 	backend, err := selectBackend(cfg)
@@ -523,10 +555,21 @@ func launchInvocation(cfg envConfig, inv invocation) error {
 		}
 		return nil
 	case "hyprland":
-		if focused, err := focusExistingHyprland(inv); focused || err != nil {
-			return err
-		}
-		return launchHyprlandKitty(cfg, inv)
+		return withOverlayLock(func() error {
+			c, err := newOverlayController(cfg)
+			if err != nil {
+				return err
+			}
+			if err := c.launch(inv); err != nil {
+				// Recover the live palette before releasing the operation lock.
+				// Never reveal here: a subsequent explicit hide must stay hidden.
+				if recoveryErr := c.restorePalette(); recoveryErr != nil {
+					return fmt.Errorf("%w; palette recovery: %v", err, recoveryErr)
+				}
+				return err
+			}
+			return nil
+		})
 	case "kitty":
 		return launchFallbackKitty(inv)
 	default:
@@ -550,7 +593,7 @@ func resolveInvocation(cfg envConfig, inv *invocation) error {
 		inv.OriginalArgs = append([]string{inv.Command}, inv.Args...)
 	}
 
-	if inv.TargetPath == "" && len(inv.Args) > 0 && !strings.HasPrefix(inv.Args[0], "-") {
+	if inv.Mode != "exec" && inv.TargetPath == "" && len(inv.Args) > 0 && !strings.HasPrefix(inv.Args[0], "-") {
 		inv.TargetPath = inv.Args[0]
 	}
 
@@ -709,6 +752,20 @@ func loadActions(path string) ([]action, error) {
 }
 
 func paletteBody(cfg envConfig) error {
+	for {
+		err := paletteAttempt(cfg)
+		if err == nil {
+			return nil
+		}
+		logLine(cfg, "palette error: %v", err)
+		fmt.Fprintf(os.Stderr, "\nWisp: %v\nPress Enter to retry (Ctrl-C to cancel).\n", err)
+		if _, readErr := bufio.NewReader(os.Stdin).ReadString('\n'); readErr != nil {
+			return err
+		}
+	}
+}
+
+func paletteAttempt(cfg envConfig) error {
 	if _, err := exec.LookPath("fzf"); err != nil {
 		return errors.New("fzf is required for wisp palette")
 	}
@@ -739,7 +796,11 @@ func paletteBody(cfg envConfig) error {
 	cmd.Stdout = &out
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return nil
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && (exit.ExitCode() == 1 || exit.ExitCode() == 130) {
+			return nil
+		}
+		return fmt.Errorf("fzf: %w", err)
 	}
 	selection := strings.TrimSpace(out.String())
 	if selection == "" {
@@ -748,11 +809,15 @@ func paletteBody(cfg envConfig) error {
 	actionID := strings.SplitN(selection, "\t", 2)[0]
 	logLine(cfg, "palette selected action=%s", actionID)
 	logLine(cfg, "palette launching action=%s", actionID)
-	return run(cfg, []string{"action", actionID})
+	if err := run(cfg, []string{"action", actionID}); err != nil {
+		return fmt.Errorf("palette action %q: %w", actionID, err)
+	}
+	return nil
 }
 
 func doctor(cfg envConfig) error {
 	fmt.Println("wisp: doctor")
+	doctorHint(cfg)
 	fmt.Printf("  os: %s\n", runtime.GOOS)
 	if hasKitty() {
 		fmt.Println("  kitty: ok")
@@ -821,6 +886,16 @@ func hintCommand(cfg envConfig, args []string) error {
 	if len(args) > 0 {
 		sub = args[0]
 	}
+	if runtime.GOOS == "linux" && len(args) > 1 {
+		session, err := parseHintSession(sub, args[1:])
+		if err != nil {
+			return err
+		}
+		if sub == "show" {
+			return showHintForSession(cfg, hintText(cfg), session)
+		}
+		return closeHintForSession(cfg, session.Token)
+	}
 	switch sub {
 	case "show":
 		return hint(cfg)
@@ -848,8 +923,12 @@ func hintMessage(cfg envConfig) string {
 }
 
 func hintText(cfg envConfig) string {
+	return hintTextForPlatform(cfg, runtime.GOOS)
+}
+
+func hintTextForPlatform(cfg envConfig, platform string) string {
 	actions, err := loadActions(cfg.actionsPath)
-	if err != nil {
+	if err != nil && platform != "linux" {
 		return "Wisp\nesc  cancel"
 	}
 	rows := []struct {
@@ -861,6 +940,9 @@ func hintText(cfg envConfig) string {
 		if key == "" || a.ID == "" {
 			continue
 		}
+		if platform == "linux" && (strings.EqualFold(key, "h") || strings.EqualFold(key, "space") || strings.EqualFold(key, "esc")) {
+			continue
+		}
 		label := a.Title
 		if label == "" {
 			label = a.ID
@@ -869,6 +951,9 @@ func hintText(cfg envConfig) string {
 			key   string
 			label string
 		}{key: key, label: label})
+	}
+	if platform == "linux" {
+		rows = append(rows, struct{ key, label string }{"h", "hide overlay"}, struct{ key, label string }{"space", "search"})
 	}
 	rows = append(rows, struct {
 		key   string
@@ -893,7 +978,17 @@ func hintText(cfg envConfig) string {
 }
 
 func showHint(cfg envConfig, text string) error {
-	_ = closeHint(cfg)
+	return showHintForSession(cfg, text, nil)
+}
+
+func showHintLocked(cfg envConfig, text string) error {
+	return showHintLockedForSession(cfg, text, nil)
+}
+
+func showHintLockedForSession(cfg envConfig, text string, session *hintSession) error {
+	if err := closeHintLocked(cfg); err != nil && runtime.GOOS == "linux" {
+		return err
+	}
 	switch os.Getenv("WISP_HINT_BACKEND") {
 	case "stdout":
 		fmt.Println(text)
@@ -907,7 +1002,16 @@ func showHint(cfg envConfig, text string) error {
 		if err := cmd.Start(); err != nil {
 			return err
 		}
-		return writeHintPID(cfg, cmd.Process.Pid)
+		return trackLegacyHintForSession(cfg, cmd, session)
+	}
+	if runtime.GOOS == "linux" {
+		helper, err := findHintHelper(cfg)
+		if err == nil {
+			return startLinuxHintForSession(cfg, helper, text, 5*time.Second, session)
+		}
+		if os.Getenv("WISP_HINT_BACKEND") == "native" || os.Getenv("WISP_HINT_HELPER") != "" {
+			return err
+		}
 	}
 	if runtime.GOOS == "darwin" {
 		if helper, err := findHintHelper(cfg); err == nil {
@@ -916,7 +1020,7 @@ func showHint(cfg envConfig, text string) error {
 			if err := cmd.Start(); err != nil {
 				return err
 			}
-			return writeHintPID(cfg, cmd.Process.Pid)
+			return trackLegacyHint(cfg, cmd)
 		}
 	}
 	if hyprlandAvailable() {
@@ -934,6 +1038,10 @@ func writeHintPID(cfg envConfig, pid int) error {
 }
 
 func closeHint(cfg envConfig) error {
+	return withHintLock(cfg, func() error { return closeHintLocked(cfg) })
+}
+
+func closeHintLocked(cfg envConfig) error {
 	data, err := os.ReadFile(expand(cfg.hintPIDPath))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -942,6 +1050,9 @@ func closeHint(cfg envConfig) error {
 		return err
 	}
 	_ = os.Remove(expand(cfg.hintPIDPath))
+	if runtime.GOOS == "linux" {
+		return closeLinuxHint(data)
+	}
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil || pid <= 0 {
 		return nil
@@ -955,19 +1066,27 @@ func closeHint(cfg envConfig) error {
 }
 
 func findHintHelper(cfg envConfig) (string, error) {
+	return findHintHelperForPlatform(cfg, runtime.GOOS)
+}
+
+func findHintHelperForPlatform(cfg envConfig, platform string) (string, error) {
 	if helper := os.Getenv("WISP_HINT_HELPER"); helper != "" {
 		return findExecutable(helper)
 	}
 	selfDir := filepath.Dir(cfg.self)
+	name := "wisp-hint-macos"
+	if platform == "linux" {
+		name = "wisp-hint-linux"
+	}
 	for _, candidate := range []string{
-		filepath.Join(selfDir, "wisp-hint-macos"),
-		"wisp-hint-macos",
+		filepath.Join(selfDir, name),
+		name,
 	} {
 		if path, err := findExecutable(candidate); err == nil {
 			return path, nil
 		}
 	}
-	return "", errors.New("wisp-hint-macos was not found")
+	return "", fmt.Errorf("%s was not found beside wisp or on PATH", name)
 }
 
 func bindings(cfg envConfig, backend string) error {
@@ -1002,12 +1121,14 @@ submap = wisp
 bind = , ESCAPE, exec, wisp hint close
 bind = , ESCAPE, submap, reset
 bind = , SPACE, exec, sh -lc 'wisp hint close; wisp palette'`)
+		fmt.Println("bind = , SPACE, submap, reset")
 		for _, a := range actions {
 			key := strings.ToUpper(strings.TrimSpace(a.Key))
 			if key == "" || a.ID == "" {
 				continue
 			}
 			fmt.Printf("bind = , %s, exec, sh -lc 'wisp hint close; wisp action %s'\n", key, a.ID)
+			fmt.Printf("bind = , %s, submap, reset\n", key)
 		}
 		fmt.Println("submap = reset")
 	default:
@@ -1070,14 +1191,34 @@ func launchHyprlandKitty(cfg envConfig, inv invocation) error {
 	if err != nil {
 		return err
 	}
+	return spawnHyprlandKitty(cfg, inv, lua)
+}
+
+func spawnHyprlandKitty(cfg envConfig, inv invocation, lua bool) error {
 	inner := `work_dir="$1"; wisp_id="$2"; wisp_role="$3"; wisp_title="$4"; wisp_layout="$5"; shift 5; cd -- "$work_dir" && export WISP=1 WISP_ID="$wisp_id" WISP_ROLE="$wisp_role" WISP_TITLE="$wisp_title" WISP_LAYOUT="$wisp_layout" && exec "$@"`
-	parts := []string{"kitty", "--class", "wisp-" + inv.SurfaceID, "--title", inv.WindowTitle, "/bin/sh", "-lc", inner, "sh", inv.WorkDir, inv.SurfaceID, inv.Mode, inv.WindowTitle, inv.Layout}
-	parts = append(parts, inv.OriginalArgs...)
-	rules := fmt.Sprintf("[workspace special:%s; float; size 900 600; center]", cfg.hyprWorkspace)
-	if inv.Layout == "fullscreen" {
-		rules = fmt.Sprintf("[workspace special:%s; fullscreen]", cfg.hyprWorkspace)
+	width, height := cfg.kittyInitialWidth, cfg.kittyInitialHt
+	if width == "" {
+		width = "70c"
 	}
-	luaRules := "{workspace = " + luaQuote("special:"+cfg.hyprWorkspace)
+	if height == "" {
+		height = "38c"
+	}
+	// Kitty remembers maximize state as well as size. Disable restoration so a
+	// post-map client request cannot resurrect a different window's maximization.
+	// Explicit fullscreen actions remain controlled by the compositor rules.
+	parts := []string{"kitty", "--class", "wisp-" + inv.SurfaceID, "--title", inv.WindowTitle,
+		"--start-as", "normal", "-o", "remember_window_size=no",
+		"-o", "initial_window_width=" + width, "-o", "initial_window_height=" + height,
+		"/bin/sh", "-lc", inner, "sh", inv.WorkDir, inv.SurfaceID, inv.Mode, inv.WindowTitle, inv.Layout}
+	parts = append(parts, hyprlandChildArgs(cfg, inv)...)
+	// Window.cpp (v0.56.2) parses the trailing "silent" in the workspace
+	// effect for both providers. A late map must never reopen an explicitly
+	// hidden overlay; only the controller may reveal it after observing a map.
+	rules := fmt.Sprintf("[workspace special:%s silent; float; size 900 600; center]", cfg.hyprWorkspace)
+	if inv.Layout == "fullscreen" {
+		rules = fmt.Sprintf("[workspace special:%s silent; fullscreen]", cfg.hyprWorkspace)
+	}
+	luaRules := "{workspace = " + luaQuote("special:"+cfg.hyprWorkspace+" silent")
 	if inv.Layout == "fullscreen" {
 		luaRules += ", fullscreen = true}"
 	} else {
@@ -1142,7 +1283,11 @@ func isLuaProvider(provider string) (bool, error) {
 }
 
 func hyprctlOutput(args ...string) ([]byte, error) {
-	out, err := exec.Command("hyprctl", args...).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "hyprctl", args...)
+	cmd.WaitDelay = 100 * time.Millisecond
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return out, fmt.Errorf("hyprctl %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
@@ -1154,8 +1299,14 @@ func hyprlandDispatch(lua bool, name, arg, expression string) error {
 	if lua {
 		args = []string{"dispatch", expression}
 	}
-	_, err := hyprctlOutput(args...)
-	return err
+	out, err := hyprctlOutput(args...)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(string(out)) != "ok" {
+		return fmt.Errorf("hyprctl %s: %s", strings.Join(args, " "), strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // Lua strings are not shell strings (nor Go/JSON strings). Fixed-width decimal
@@ -1209,50 +1360,25 @@ func focusExistingHyprland(inv invocation) (bool, error) {
 	if inv.Mode != "summon" || !hyprlandAvailable() {
 		return false, nil
 	}
-	out, err := hyprctlOutput("-j", "clients")
-	if err != nil {
-		return false, err
-	}
-	var clients []struct {
-		Address   string `json:"address"`
-		Title     string `json:"title"`
-		Workspace struct {
-			Name string `json:"name"`
-		} `json:"workspace"`
-	}
-	if err := json.Unmarshal(out, &clients); err != nil {
-		return false, fmt.Errorf("decode hyprctl clients: %w", err)
-	}
-	prefix := "wisp:" + inv.SurfaceID + ":"
-	for _, client := range clients {
-		if !strings.HasPrefix(client.Title, prefix) || client.Address == "" {
-			continue
-		}
-		lua, err := hyprlandLuaProvider()
+	var found bool
+	err := withOverlayLock(func() error {
+		c, err := newOverlayController(loadEnv())
 		if err != nil {
-			return false, err
+			return err
 		}
-		selector := "address:" + client.Address
-		focus := func() error {
-			return hyprlandDispatch(lua, "focuswindow", selector, "hl.dsp.focus({window = "+luaQuote(selector)+"})")
+		var clients []hyprClient
+		if err := c.query("clients", &clients); err != nil {
+			return err
 		}
-		focusErr := focus()
-		if focusErr == nil {
-			return true, nil
-		}
-		if strings.HasPrefix(client.Workspace.Name, "special:") {
-			name := strings.TrimPrefix(client.Workspace.Name, "special:")
-			if err := hyprlandDispatch(lua, "togglespecialworkspace", name, "hl.dsp.workspace.toggle_special("+luaQuote(name)+")"); err != nil {
-				return false, fmt.Errorf("%v; %w", focusErr, err)
+		for _, w := range clients {
+			if wispMatch(w, inv.SurfaceID) {
+				found = true
+				return c.present(w, inv, false)
 			}
-			if err := focus(); err != nil {
-				return false, err
-			}
-			return true, nil
 		}
-		return false, focusErr
-	}
-	return false, nil
+		return nil
+	})
+	return found && err == nil, err
 }
 
 func postLaunchAerospaceFloat(title string) {

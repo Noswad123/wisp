@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Every hyprctl invocation goes to this subprocess, never the live compositor.
@@ -46,7 +48,36 @@ func TestHyprctlHelper(t *testing.T) {
 			os.Exit(7)
 		}
 	case "-j clients":
+		if os.Getenv("WISP_TEST_LATE_MAP") != "waiting" && (bytes.Contains(previous, []byte("exec_cmd")) || bytes.Contains(previous, []byte(`"exec"`))) {
+			if spawned := os.Getenv("WISP_TEST_SPAWNED"); spawned != "" {
+				fmt.Print(spawned)
+				break
+			}
+		}
 		fmt.Print(os.Getenv("WISP_TEST_CLIENTS"))
+	case "-j monitors":
+		shown := ""
+		if (bytes.Count(previous, []byte("toggle_special"))+bytes.Count(previous, []byte("togglespecialworkspace")))%2 == 1 {
+			shown = "special:wisp"
+		}
+		// Model Window.cpp's map-time workspace effect: non-silent placement
+		// reveals the special workspace independently of the Wisp controller.
+		if os.Getenv("WISP_TEST_LATE_MAP") == "mapped" && !bytes.Contains(previous, []byte("special:wisp silent")) {
+			shown = "special:wisp"
+		}
+		fmt.Printf(`[{"name":"DP-1","width":1920,"height":1080,"scale":1,"focused":true,"specialWorkspace":{"name":%q}}]`, shown)
+	case "-j activewindow":
+		var ws []hyprClient
+		data := os.Getenv("WISP_TEST_CLIENTS")
+		if spawned := os.Getenv("WISP_TEST_SPAWNED"); spawned != "" {
+			data = spawned
+		}
+		_ = json.Unmarshal([]byte(data), &ws)
+		if len(ws) > 0 {
+			_ = json.NewEncoder(os.Stdout).Encode(ws[0])
+		} else {
+			fmt.Print(`{}`)
+		}
 	default:
 		failure := os.Getenv("WISP_TEST_FAILURE")
 		focus := strings.Contains(key, "focuswindow") || strings.Contains(key, "hl.dsp.focus(")
@@ -56,6 +87,10 @@ func TestHyprctlHelper(t *testing.T) {
 			fmt.Print("dispatcher stdout detail\n")
 			fmt.Fprint(os.Stderr, "dispatcher stderr detail\n")
 			os.Exit(7)
+		}
+		if response := os.Getenv("WISP_TEST_RESPONSE"); response != "" {
+			fmt.Print(response)
+			break
 		}
 		fmt.Print("ok\n")
 	}
@@ -75,15 +110,22 @@ func mockHyprctl(t *testing.T, info string) func() [][]string {
 	}
 	logPath := filepath.Join(dir, "calls.jsonl")
 	t.Setenv("PATH", dir)
+	t.Setenv("XDG_RUNTIME_DIR", dir)
 	t.Setenv("HYPRLAND_INSTANCE_SIGNATURE", "mock-only")
 	t.Setenv("WISP_TEST_HYPRCTL", "1")
+	// Race-instrumented helper subprocesses need no exit grace period: all
+	// their work is synchronous, and the default adds a second per IPC query.
+	t.Setenv("GORACE", os.Getenv("GORACE")+" atexit_sleep_ms=0")
 	t.Setenv("WISP_TEST_LOG", logPath)
 	t.Setenv("WISP_TEST_INFO_JSON", info)
 	t.Setenv("WISP_TEST_INFO_TEXT", info)
 	t.Setenv("WISP_TEST_JSON_ERROR", "")
 	t.Setenv("WISP_TEST_TEXT_ERROR", "")
 	t.Setenv("WISP_TEST_FAILURE", "")
+	t.Setenv("WISP_TEST_RESPONSE", "")
 	t.Setenv("WISP_TEST_CLIENTS", "[]")
+	t.Setenv("WISP_TEST_SPAWNED", "")
+	t.Setenv("WISP_TEST_LATE_MAP", "")
 	return func() [][]string {
 		t.Helper()
 		data, err := os.ReadFile(logPath)
@@ -155,7 +197,7 @@ func TestLaunchHyprlandKitty(t *testing.T) {
 			t.Run(provider+"/"+layout, func(t *testing.T) {
 				calls := mockHyprctl(t, "State:\nconfigProvider: "+provider)
 				inv := invocation{SurfaceID: "palette", Mode: "run", WorkDir: "/tmp/quoted ' dir", WindowTitle: "wisp:palette:雪 \"'); os.exit(); --\n\\", Layout: layout, OriginalArgs: []string{"/usr/bin/true", "$(touch /never-execute)", "a'b\"c\\d\n7"}}
-				cfg := envConfig{hyprWorkspace: "wisp"}
+				cfg := envConfig{hyprWorkspace: "wisp", kittyInitialWidth: "80c", kittyInitialHt: "42c"}
 				if provider == "lua" {
 					cfg.hyprWorkspace = "wisp\"}); os.exit(); --\n\\"
 				}
@@ -163,12 +205,14 @@ func TestLaunchHyprlandKitty(t *testing.T) {
 					t.Fatal(err)
 				}
 				inner := `work_dir="$1"; wisp_id="$2"; wisp_role="$3"; wisp_title="$4"; wisp_layout="$5"; shift 5; cd -- "$work_dir" && export WISP=1 WISP_ID="$wisp_id" WISP_ROLE="$wisp_role" WISP_TITLE="$wisp_title" WISP_LAYOUT="$wisp_layout" && exec "$@"`
-				parts := []string{"kitty", "--class", "wisp-palette", "--title", inv.WindowTitle, "/bin/sh", "-lc", inner, "sh", inv.WorkDir, "palette", "run", inv.WindowTitle, layout}
+				parts := []string{"kitty", "--class", "wisp-palette", "--title", inv.WindowTitle,
+					"--start-as", "normal", "-o", "remember_window_size=no", "-o", "initial_window_width=80c", "-o", "initial_window_height=42c",
+					"/bin/sh", "-lc", inner, "sh", inv.WorkDir, "palette", "run", inv.WindowTitle, layout}
 				parts = append(parts, inv.OriginalArgs...)
 				command := shellJoin(parts)
 				var want []string
 				if provider == "lua" {
-					rules := "{workspace = " + luaQuote("special:"+cfg.hyprWorkspace)
+					rules := "{workspace = " + luaQuote("special:"+cfg.hyprWorkspace+" silent")
 					if layout == "fullscreen" {
 						rules += ", fullscreen = true}"
 					} else {
@@ -176,9 +220,9 @@ func TestLaunchHyprlandKitty(t *testing.T) {
 					}
 					want = []string{"dispatch", "hl.dsp.exec_cmd(" + luaQuote(command) + ", " + rules + ")"}
 				} else {
-					rules := "[workspace special:wisp; float; size 900 600; center]"
+					rules := "[workspace special:wisp silent; float; size 900 600; center]"
 					if layout == "fullscreen" {
-						rules = "[workspace special:wisp; fullscreen]"
+						rules = "[workspace special:wisp silent; fullscreen]"
 					}
 					want = []string{"dispatch", "exec", rules + " " + command}
 				}
@@ -191,15 +235,57 @@ func TestLaunchHyprlandKitty(t *testing.T) {
 	}
 }
 
+func TestSilentSpawnCannotReopenAfterTimeoutAndHide(t *testing.T) {
+	for _, provider := range []string{"lua", "hyprlang"} {
+		t.Run(provider, func(t *testing.T) {
+			mockHyprctl(t, "configProvider: "+provider)
+			t.Setenv("WISP_TEST_LATE_MAP", "waiting")
+			t.Setenv("WISP_TEST_SPAWNED", `[{"address":"0x123","class":"wisp-wyrm","mapped":true,"floating":true,"size":[800,500],"workspace":{"name":"special:wisp"}}]`)
+			c, err := newOverlayController(envConfig{hyprWorkspace: "wisp"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			clock := time.Time{}
+			c.now = func() time.Time { return clock }
+			c.sleep = func(d time.Duration) { clock = clock.Add(d) }
+			c.timeout = 50 * time.Millisecond
+			if err := c.visibility(true); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.launch(testInvocation()); err == nil {
+				t.Fatal("expected map timeout")
+			}
+			if err := c.visibility(false); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("WISP_TEST_LATE_MAP", "mapped")
+			var clients []hyprClient
+			if err := c.query("clients", &clients); err != nil || len(clients) != 1 {
+				t.Fatalf("late map: %v %v", clients, err)
+			}
+			var monitors []hyprMonitor
+			if err := c.query("monitors", &monitors); err != nil {
+				t.Fatal(err)
+			}
+			if monitors[0].Special.Name != "" {
+				t.Fatal("non-silent late map reopened explicitly hidden overlay")
+			}
+			if err := c.visibility(true); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestFocusExistingHyprland(t *testing.T) {
 	for _, provider := range []string{"lua", "hyprlang"} {
-		for _, failure := range []string{"", "first-focus", "focus", "toggle"} {
+		for _, failure := range []string{"", "focus", "toggle"} {
 			t.Run(provider+"/"+failure, func(t *testing.T) {
 				calls := mockHyprctl(t, "configProvider: "+provider)
 				t.Setenv("WISP_TEST_FAILURE", failure)
 				address := "0x123\"}); bad(); --\\\n8"
-				workspace := "wisp'\"}); bad(); --\\\n9"
-				clients, _ := json.Marshal([]map[string]any{{"address": address, "title": "wisp:palette:hostile", "workspace": map[string]string{"name": "special:" + workspace}}})
+				workspace := "wisp"
+				clients, _ := json.Marshal([]map[string]any{{"address": address, "class": "wisp-palette", "mapped": true, "floating": true, "size": []int{900, 600}, "title": "wisp:palette:hostile", "workspace": map[string]string{"name": "special:" + workspace}}})
 				t.Setenv("WISP_TEST_CLIENTS", string(clients))
 				focused, err := focusExistingHyprland(invocation{Mode: "summon", SurfaceID: "palette"})
 				wantErr := failure == "focus" || failure == "toggle"
@@ -209,21 +295,32 @@ func TestFocusExistingHyprland(t *testing.T) {
 				if wantErr {
 					assertHyprctlError(t, err)
 				}
-				focus := []string{"dispatch", "focuswindow", "address:" + address}
 				toggle := []string{"dispatch", "togglespecialworkspace", workspace}
 				if provider == "lua" {
-					focus = []string{"dispatch", "hl.dsp.focus({window = " + luaQuote("address:"+address) + "})"}
 					toggle = []string{"dispatch", "hl.dsp.workspace.toggle_special(" + luaQuote(workspace) + ")"}
 				}
-				want := [][]string{{"-j", "clients"}, {"-j", "systeminfo"}, focus}
-				if failure != "" {
-					want = append(want, toggle)
-					if failure != "toggle" {
-						want = append(want, focus)
+				got := calls()
+				toggles := 0
+				for _, call := range got {
+					if reflect.DeepEqual(call, toggle) {
+						toggles++
 					}
 				}
-				if got := calls(); !reflect.DeepEqual(got, want) {
-					t.Fatalf("calls=%q want=%q", got, want)
+				if toggles != 1 {
+					t.Fatalf("must reveal hidden workspace even when focus succeeds: %q", got)
+				}
+				if failure == "" {
+					focus := []string{"dispatch", "focuswindow", "address:" + address}
+					if provider == "lua" {
+						focus = []string{"dispatch", "hl.dsp.focus({window = " + luaQuote("address:"+address) + "})"}
+					}
+					matched := false
+					for _, call := range got {
+						matched = matched || reflect.DeepEqual(call, focus)
+					}
+					if !matched {
+						t.Fatalf("missing safely quoted address: %q", got)
+					}
 				}
 			})
 		}
@@ -253,6 +350,37 @@ func TestHyprlandLaunchError(t *testing.T) {
 	}
 }
 
+func TestHyprlandDispatchErrorWithSuccessfulExit(t *testing.T) {
+	mockHyprctl(t, "configProvider: lua")
+	t.Setenv("WISP_TEST_RESPONSE", "Invalid dispatcher: compositor detail")
+	err := hyprlandDispatch(true, "", "", `hl.dsp.no_op()`)
+	if err == nil || !strings.Contains(err.Error(), "hyprctl dispatch") || !strings.Contains(err.Error(), "compositor detail") {
+		t.Fatalf("lost successful-exit error: %v", err)
+	}
+}
+
+func TestDaemonOverlayProtocol(t *testing.T) {
+	mockHyprctl(t, "configProvider: lua")
+	cfg := envConfig{backend: "hyprland", hyprWorkspace: "wisp", logPath: filepath.Join(t.TempDir(), "daemon.log")}
+	for _, req := range []daemonRequest{{Op: "launch", Args: []string{"show"}}, {Op: "hide"}} {
+		server, client := net.Pipe()
+		done := make(chan struct{})
+		go func() { handleDaemonConn(cfg, server); close(done) }()
+		if err := json.NewEncoder(client).Encode(req); err != nil {
+			t.Fatal(err)
+		}
+		var resp daemonResponse
+		if err := json.NewDecoder(client).Decode(&resp); err != nil {
+			t.Fatal(err)
+		}
+		client.Close()
+		<-done
+		if !resp.OK {
+			t.Fatal(resp.Message)
+		}
+	}
+}
+
 func TestPaletteHyprlandDispatch(t *testing.T) {
 	for _, provider := range []string{"lua", "hyprlang"} {
 		t.Run(provider, func(t *testing.T) {
@@ -262,21 +390,68 @@ func TestPaletteHyprlandDispatch(t *testing.T) {
 				t.Fatal(err)
 			}
 			cfg := envConfig{backend: "hyprland", self: self, hyprWorkspace: "wisp"}
+			t.Setenv("WISP_TEST_SPAWNED", `[{"address":"0x123","class":"wisp-palette","mapped":true,"floating":true,"size":[900,600],"workspace":{"name":"special:wisp"}}]`)
 			if err := runDirect(cfg, []string{"palette"}); err != nil {
 				t.Fatal(err)
 			}
 			got := calls()
-			if len(got) != 2 || got[1][0] != "dispatch" || !strings.Contains(strings.Join(got[1], " "), "_palette") {
+			if len(got) < 3 || got[2][0] != "dispatch" || !strings.Contains(strings.Join(got[2], " "), "_palette") {
 				t.Fatalf("palette did not use launch dispatch: %q", got)
 			}
 		})
 	}
 }
 
+func TestPaletteLogsActionFailureBeforeRetry(t *testing.T) {
+	dir := t.TempDir()
+	// Stub fzf emits one selection without any UI or inherited option parsing.
+	if err := os.WriteFile(filepath.Join(dir, "fzf"), []byte("#!/bin/sh\nprintf 'broken\\tBroken\\texec\\n'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := envConfig{actionsPath: filepath.Join(dir, "actions.toml"), logPath: filepath.Join(dir, "palette.log")}
+	catalog := "[[action]]\nid = \"broken\"\nkind = \"exec\"\ncommand = [\"wisp-nonexistent-palette-test-command\"]\n"
+	if err := os.WriteFile(cfg.actionsPath, []byte(catalog), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("WISP_NO_DAEMON", "1")
+	input, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	output, err := os.Create(filepath.Join(dir, "stderr"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+	stdin, stderr := os.Stdin, os.Stderr
+	os.Stdin, os.Stderr = input, output
+	defer func() { os.Stdin, os.Stderr = stdin, stderr }()
+	err = paletteBody(cfg)
+	if err == nil || !strings.Contains(err.Error(), `palette action "broken"`) || !strings.Contains(err.Error(), "command not found") {
+		t.Fatalf("expected selected action error: %v", err)
+	}
+	log, readErr := os.ReadFile(cfg.logPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.Contains(string(log), "palette error: "+err.Error()) {
+		t.Fatalf("action failure missing from log: %s", log)
+	}
+	retry, readErr := os.ReadFile(output.Name())
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.Contains(string(retry), err.Error()) || !strings.Contains(string(retry), "Press Enter to retry") {
+		t.Fatalf("lost visible retry error: %s", retry)
+	}
+}
+
 func TestSummonFocusFailureDoesNotLaunchDuplicate(t *testing.T) {
 	calls := mockHyprctl(t, "configProvider: lua")
 	t.Setenv("WISP_TEST_FAILURE", "focus")
-	t.Setenv("WISP_TEST_CLIENTS", `[{"address":"0x123","title":"wisp:palette:existing","workspace":{"name":"1"}}]`)
+	t.Setenv("WISP_TEST_CLIENTS", `[{"address":"0x123","class":"wisp-palette","mapped":true,"floating":true,"size":[900,600],"title":"wisp:palette:existing","workspace":{"name":"special:wisp"}}]`)
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -284,8 +459,10 @@ func TestSummonFocusFailureDoesNotLaunchDuplicate(t *testing.T) {
 	err = launchInvocation(envConfig{backend: "hyprland"}, invocation{Mode: "summon", ID: "palette", Command: self})
 	assertHyprctlError(t, err)
 	got := calls()
-	if len(got) != 3 || !strings.HasPrefix(got[2][1], "hl.dsp.focus(") {
-		t.Fatalf("unexpected fallback after focus error: %q", got)
+	for _, call := range got {
+		if strings.Contains(strings.Join(call, " "), "exec_cmd") {
+			t.Fatalf("unexpected spawn after focus error: %q", got)
+		}
 	}
 }
 
@@ -298,7 +475,7 @@ func TestFocusExistingHyprlandNoMatch(t *testing.T) {
 			t.Fatalf("mode=%s: focused=%v err=%v", mode, focused, err)
 		}
 	}
-	if got := calls(); !reflect.DeepEqual(got, [][]string{{"-j", "clients"}}) {
+	if got := calls(); !reflect.DeepEqual(got, [][]string{{"-j", "systeminfo"}, {"-j", "clients"}}) {
 		t.Fatalf("unexpected dispatch without a matching summon window: %q", got)
 	}
 }
