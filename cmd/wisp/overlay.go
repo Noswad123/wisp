@@ -488,6 +488,30 @@ func (c *overlayController) present(w hyprClient, inv invocation, initial bool) 
 		if err != nil {
 			return err
 		}
+		if inv.TerminalRows > 0 {
+			// Cell counts cannot be converted to logical pixels here. Remove
+			// tile/fullscreen state first, then use this client's normal mapped
+			// height, not the generic 600px preference or fullscreen dimensions.
+			if err := c.applyLayout(w, inv, preferred, false); err != nil {
+				return err
+			}
+			if err := c.wait("normal terminal geometry "+sel, func() (bool, error) {
+				var clients []hyprClient
+				if err := c.query("clients", &clients); err != nil {
+					return false, err
+				}
+				for _, client := range clients {
+					if client.Address == w.Address && client.Mapped && !client.Hidden && client.Floating && client.Fullscreen == 0 && client.Size[1] > 0 {
+						w = client
+						preferred[1] = min(client.Size[1], usable[1])
+						return true, nil
+					}
+				}
+				return false, nil
+			}); err != nil {
+				return err
+			}
+		}
 	}
 	if err := c.applyLayout(w, inv, preferred, resize); err != nil {
 		return err

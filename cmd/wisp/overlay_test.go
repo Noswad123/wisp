@@ -28,6 +28,7 @@ type overlayFake struct {
 	requestedSize, constrainedSize [2]int
 	activeQueries                  int
 	onActiveQuery                  func()
+	onFloat                        func(*hyprClient)
 }
 
 func fakeOverlay(t *testing.T) *overlayFake {
@@ -101,6 +102,9 @@ func fakeOverlay(t *testing.T) *overlayFake {
 				}
 				if name == "setfloating" {
 					w.Floating = true
+					if f.onFloat != nil {
+						f.onFloat(w)
+					}
 				}
 				if name == "resizewindowpixel" {
 					if _, err := fmt.Sscanf(arg, "exact %d %d,", &f.requestedSize[0], &f.requestedSize[1]); err != nil {
@@ -131,6 +135,98 @@ func testSurface() hyprClient {
 }
 func testInvocation() invocation {
 	return invocation{Mode: "summon", SurfaceID: "wyrm", Layout: "floating"}
+}
+
+func TestTerminalRowsInitialGeometry(t *testing.T) {
+	for _, lua := range []bool{false, true} {
+		for _, adopted := range []bool{false, true} {
+			for _, monitorHeight := range []int{2160, 700} {
+				t.Run(fmt.Sprintf("lua=%v/adopted=%v/height=%d", lua, adopted, monitorHeight), func(t *testing.T) {
+					f := fakeOverlay(t)
+					f.c.lua = lua
+					f.monitors[0].Height = monitorHeight
+					w := testSurface()
+					w.Size = [2]int{1100, 820}
+					if adopted {
+						w.Floating, w.Fullscreen, w.Size = false, 2, [2]int{3840, 2160}
+						// Normal dimensions arrive only after fullscreen/tile removal.
+						f.onFloat = func(w *hyprClient) { w.Size = [2]int{1100, 820} }
+					}
+					f.clients = []hyprClient{w}
+					inv := testInvocation()
+					inv.TerminalRows = 28
+					if err := f.c.present(w, inv, !adopted); err != nil {
+						t.Fatal(err)
+					}
+					if want := [2]int{900, min(820, monitorHeight)}; f.requestedSize != want {
+						t.Fatalf("size=%v want=%v", f.requestedSize, want)
+					}
+					// Preference is initial only, even if user later shrinks below it.
+					f.onFloat = nil
+					f.clients[0].Size = [2]int{740, 450}
+					f.requestedSize = [2]int{}
+					if err := f.c.summon(f.clients[0], inv); err != nil {
+						t.Fatal(err)
+					}
+					if f.requestedSize != [2]int{} || f.active.Size != [2]int{740, 450} {
+						t.Fatal("summon changed custom geometry")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestTerminalRowsLateMaximizeKeepsMeasuredHeight(t *testing.T) {
+	for _, lua := range []bool{false, true} {
+		t.Run(fmt.Sprintf("lua=%v", lua), func(t *testing.T) {
+			f := fakeOverlay(t)
+			f.c.lua = lua
+			w := testSurface()
+			w.Size[1] = 820
+			f.clients = []hyprClient{w}
+			inv := testInvocation()
+			inv.TerminalRows = 28
+			f.onActiveQuery = func() {
+				if f.activeQueries == 3 {
+					simulateStartupMaximize(f)
+				}
+			}
+			if err := f.c.present(w, inv, true); err != nil {
+				t.Fatal(err)
+			}
+			if f.active.Fullscreen != 0 || !f.active.Floating || f.active.Size != [2]int{900, 820} {
+				t.Fatalf("late maximize lost measured height: %+v", f.active)
+			}
+			if got := strings.Count(strings.Join(f.calls, "\n"), "resizewindowpixel:"); got != 2 {
+				t.Fatalf("expected initial sizing and bounded correction, got %d", got)
+			}
+		})
+	}
+}
+
+func TestTerminalRowsLaunchHandoff(t *testing.T) {
+	f := fakeOverlay(t)
+	f.c.spawn = func(inv invocation) error {
+		if inv.TerminalRows != 28 {
+			t.Fatalf("spawn lost terminal_rows: %+v", inv)
+		}
+		w := testSurface()
+		w.Size[1] = 820
+		f.clients = []hyprClient{w}
+		return nil
+	}
+	inv := testInvocation()
+	inv.TerminalRows = 28
+	if err := f.c.launch(inv); err != nil {
+		t.Fatal(err)
+	}
+	if f.active.Size != [2]int{900, 820} {
+		t.Fatalf("launch lost initial height: %+v", f.active)
+	}
+	if _, err := os.Stat(overlaySessionPath("-wyrm.pending")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("launch guard not cleared: %v", err)
+	}
 }
 
 func TestOverlayAdoptsFormerFullscreenWithFloatingGeometry(t *testing.T) {

@@ -22,12 +22,13 @@ import (
 )
 
 type action struct {
-	ID      string   `toml:"id"`
-	Title   string   `toml:"title"`
-	Kind    string   `toml:"kind"`
-	Key     string   `toml:"key"`
-	Layout  string   `toml:"layout"`
-	Command []string `toml:"command"`
+	ID           string   `toml:"id"`
+	Title        string   `toml:"title"`
+	Kind         string   `toml:"kind"`
+	Key          string   `toml:"key"`
+	Layout       string   `toml:"layout"`
+	Command      []string `toml:"command"`
+	TerminalRows *int     `toml:"terminal_rows"`
 }
 
 type daemonRequest struct {
@@ -58,6 +59,7 @@ type invocation struct {
 	WindowTitle  string
 	SurfaceID    string
 	Layout       string
+	TerminalRows int // Zero means no per-action initial height preference.
 }
 
 type envConfig struct {
@@ -578,6 +580,9 @@ func launchInvocation(cfg envConfig, inv invocation) error {
 }
 
 func resolveInvocation(cfg envConfig, inv *invocation) error {
+	if err := validateTerminalRows(*inv); err != nil {
+		return err
+	}
 	if inv.Command == "" {
 		return errors.New("missing command")
 	}
@@ -726,6 +731,15 @@ func invocationFromAction(cfg envConfig, id string) (invocation, error) {
 			title = a.ID
 		}
 		inv := invocation{Mode: kind, ID: a.ID, Title: title, Layout: a.Layout}
+		if a.TerminalRows != nil {
+			if *a.TerminalRows <= 0 {
+				return inv, fmt.Errorf("action %q: terminal_rows must be a positive integer", id)
+			}
+			inv.TerminalRows = *a.TerminalRows
+		}
+		if err := validateTerminalRows(inv); err != nil {
+			return inv, err
+		}
 		if kind == "shell" {
 			inv.TerminalMode = true
 			inv.Command = cfg.shell
@@ -937,10 +951,10 @@ func hintTextForPlatform(cfg envConfig, platform string) string {
 	}{}
 	for _, a := range actions {
 		key := strings.TrimSpace(a.Key)
-		if key == "" || a.ID == "" {
+		if key == "" || a.ID == "" || strings.EqualFold(key, "space") {
 			continue
 		}
-		if platform == "linux" && (strings.EqualFold(key, "h") || strings.EqualFold(key, "space") || strings.EqualFold(key, "esc")) {
+		if platform == "linux" && (strings.EqualFold(key, "h") || strings.EqualFold(key, "esc")) {
 			continue
 		}
 		label := a.Title
@@ -951,9 +965,6 @@ func hintTextForPlatform(cfg envConfig, platform string) string {
 			key   string
 			label string
 		}{key: key, label: label})
-	}
-	if platform == "linux" {
-		rows = append(rows, struct{ key, label string }{"h", "hide overlay"}, struct{ key, label string }{"space", "search"})
 	}
 	rows = append(rows, struct {
 		key   string
@@ -1103,10 +1114,10 @@ alt-space = ['exec-and-forget wisp hint show', 'mode wisp']
 
 [mode.wisp.binding]
 esc = ['exec-and-forget wisp hint close', 'mode main']
-space = ['exec-and-forget wisp hint close', 'exec-and-forget wisp palette', 'mode main']`)
+space = 'mode wisp'`)
 		for _, a := range actions {
 			key := strings.ToLower(strings.TrimSpace(a.Key))
-			if key == "" || a.ID == "" {
+			if key == "" || a.ID == "" || key == "space" {
 				continue
 			}
 			fmt.Printf("%s = ['exec-and-forget wisp hint close', 'exec-and-forget wisp action %s', 'mode main']\n", key, a.ID)
@@ -1120,11 +1131,10 @@ bind = ALT, SPACE, submap, wisp
 submap = wisp
 bind = , ESCAPE, exec, wisp hint close
 bind = , ESCAPE, submap, reset
-bind = , SPACE, exec, sh -lc 'wisp hint close; wisp palette'`)
-		fmt.Println("bind = , SPACE, submap, reset")
+bind = , SPACE, submap, wisp`)
 		for _, a := range actions {
 			key := strings.ToUpper(strings.TrimSpace(a.Key))
-			if key == "" || a.ID == "" {
+			if key == "" || a.ID == "" || key == "SPACE" {
 				continue
 			}
 			fmt.Printf("bind = , %s, exec, sh -lc 'wisp hint close; wisp action %s'\n", key, a.ID)
@@ -1166,7 +1176,7 @@ func launchMacKitty(cfg envConfig, inv invocation) error {
 		"--override", "hide_window_decorations=no",
 		"--override", "remember_window_size=no",
 		"--override", "initial_window_width=" + cfg.kittyInitialWidth,
-		"--override", "initial_window_height=" + cfg.kittyInitialHt,
+		"--override", "initial_window_height=" + kittyHeight(cfg, inv),
 		"/bin/zsh", "-lc", inner,
 		"wisp", inv.WorkDir, inv.SurfaceID, inv.Mode, inv.WindowTitle, inv.Layout,
 	}
@@ -1178,6 +1188,9 @@ func launchMacKitty(cfg envConfig, inv invocation) error {
 func launchFallbackKitty(inv invocation) error {
 	inner := `export WISP=1 WISP_ID="$1" WISP_ROLE="$2" WISP_TITLE="$3" WISP_LAYOUT="$4"; shift 4; exec "$@"`
 	args := []string{"--title", inv.WindowTitle, "--working-directory", inv.WorkDir, "/bin/sh", "-lc", inner, "sh", inv.SurfaceID, inv.Mode, inv.WindowTitle, inv.Layout}
+	if inv.TerminalRows > 0 {
+		args = append([]string{"--start-as", "normal", "-o", "remember_window_size=no", "-o", "initial_window_height=" + strconv.Itoa(inv.TerminalRows) + "c"}, args...)
+	}
 	args = append(args, inv.OriginalArgs...)
 	cmd := exec.Command("kitty", args...)
 	return cmd.Start()
@@ -1196,7 +1209,7 @@ func launchHyprlandKitty(cfg envConfig, inv invocation) error {
 
 func spawnHyprlandKitty(cfg envConfig, inv invocation, lua bool) error {
 	inner := `work_dir="$1"; wisp_id="$2"; wisp_role="$3"; wisp_title="$4"; wisp_layout="$5"; shift 5; cd -- "$work_dir" && export WISP=1 WISP_ID="$wisp_id" WISP_ROLE="$wisp_role" WISP_TITLE="$wisp_title" WISP_LAYOUT="$wisp_layout" && exec "$@"`
-	width, height := cfg.kittyInitialWidth, cfg.kittyInitialHt
+	width, height := cfg.kittyInitialWidth, kittyHeight(cfg, inv)
 	if width == "" {
 		width = "70c"
 	}
@@ -1215,6 +1228,9 @@ func spawnHyprlandKitty(cfg envConfig, inv invocation, lua bool) error {
 	// effect for both providers. A late map must never reopen an explicitly
 	// hidden overlay; only the controller may reveal it after observing a map.
 	rules := fmt.Sprintf("[workspace special:%s silent; float; size 900 600; center]", cfg.hyprWorkspace)
+	if inv.TerminalRows > 0 {
+		rules = fmt.Sprintf("[workspace special:%s silent; float; center]", cfg.hyprWorkspace)
+	}
 	if inv.Layout == "fullscreen" {
 		rules = fmt.Sprintf("[workspace special:%s silent; fullscreen]", cfg.hyprWorkspace)
 	}
@@ -1222,9 +1238,36 @@ func spawnHyprlandKitty(cfg envConfig, inv invocation, lua bool) error {
 	if inv.Layout == "fullscreen" {
 		luaRules += ", fullscreen = true}"
 	} else {
-		luaRules += ", float = true, size = {900, 600}, center = true}"
+		luaRules += ", float = true"
+		if inv.TerminalRows == 0 {
+			luaRules += ", size = {900, 600}"
+		}
+		luaRules += ", center = true}"
 	}
 	return hyprlandDispatch(lua, "exec", rules+" "+shellJoin(parts), "hl.dsp.exec_cmd("+luaQuote(shellJoin(parts))+", "+luaRules+")")
+}
+
+func validateTerminalRows(inv invocation) error {
+	if inv.TerminalRows < 0 {
+		return fmt.Errorf("action %q: terminal_rows must be a positive integer", inv.ID)
+	}
+	if inv.TerminalRows == 0 {
+		return nil
+	}
+	if inv.Mode != "run" && inv.Mode != "shell" && inv.Mode != "summon" {
+		return fmt.Errorf("action %q: terminal_rows is only supported for terminal run/shell/summon actions, not %q", inv.ID, inv.Mode)
+	}
+	if layout := strings.ToLower(strings.TrimSpace(inv.Layout)); layout != "" && layout != "floating" {
+		return fmt.Errorf("action %q: terminal_rows requires floating layout (not %q)", inv.ID, inv.Layout)
+	}
+	return nil
+}
+
+func kittyHeight(cfg envConfig, inv invocation) string {
+	if inv.TerminalRows > 0 {
+		return strconv.Itoa(inv.TerminalRows) + "c"
+	}
+	return cfg.kittyInitialHt
 }
 
 // Detection is read-only, never a trial dispatch. Some versions ignore -j for

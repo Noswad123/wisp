@@ -125,20 +125,26 @@ func TestHintPlatformText(t *testing.T) {
 	}
 	cfg := envConfig{actionsPath: path}
 	linux := hintTextForPlatform(cfg, "linux")
-	for _, text := range []string{"Linux Notes", "hide overlay", "space", "search", "esc", "cancel"} {
+	for _, text := range []string{"Linux Notes", "esc", "cancel"} {
 		if !strings.Contains(linux, text) {
 			t.Fatalf("missing %q: %s", text, linux)
 		}
 	}
-	if strings.Contains(linux, "Wrong hide") {
+	if strings.Contains(linux, "Wrong hide") || strings.Contains(linux, "hide overlay") {
 		t.Fatal(linux)
 	}
 	want := "Wisp\nn    Linux Notes\nh    Wrong hide\nesc  cancel"
 	if got := hintTextForPlatform(cfg, "darwin"); got != want {
 		t.Fatalf("mac format changed: %q", got)
 	}
+	for _, platform := range []string{"linux", "darwin"} {
+		got := strings.ToLower(hintTextForPlatform(cfg, platform))
+		if strings.Contains(got, "search") || strings.Contains(got, "space") {
+			t.Fatalf("%s advertises reserved Space/search: %q", platform, got)
+		}
+	}
 	cfg.actionsPath = "missing"
-	if got := hintTextForPlatform(cfg, "linux"); !strings.Contains(got, "hide overlay") {
+	if got := hintTextForPlatform(cfg, "linux"); got != "Wisp\nesc  cancel" {
 		t.Fatal(got)
 	}
 }

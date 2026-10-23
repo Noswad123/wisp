@@ -129,6 +129,38 @@ Actions may set `layout = "floating"` or `layout = "fullscreen"`. This is a
 backend hint; Aerospace applies it from inside the launched Kitty surface, and
 Hyprland maps fullscreen actions to a fullscreen one-shot rule.
 
+### Per-action initial terminal height
+
+Floating terminal actions (`summon`, `run`, or `shell`) may opt into a Kitty
+cell-based initial height:
+
+```toml
+terminal_rows = 28
+```
+
+Add this key inside only the desired `[[action]]` table. It must be a positive
+integer; explicit zero/negative values, `kind = "exec"`, and fullscreen layout
+are rejected when launching the action. Omission retains existing behavior.
+No application names are special-cased, and no catalogs are changed by this option.
+
+Kitty receives `initial_window_height=28c`, overriding `WISP_KITTY_HEIGHT` for
+that action only, with remembered-size restoration disabled. On Hyprland, Wisp
+omits the conflicting 900×600 spawn size rule for opted-in actions. After clearing
+tile/fullscreen state it observes the normal mapped client height and uses that
+height, with the usual preferred 900 logical-pixel width, fitted to the monitor.
+Adopted tiled/fullscreen windows use their observed normal floating height too.
+Valid user-resized floats retain their geometry on later summons; this is not a
+periodic minimum-size policy.
+
+This is an **initial preference, not a guaranteed terminal row count**: monitor
+constraints can limit it, and compositor pixels do not measure TTY rows. A
+provisional mapped size or later client/compositor requests may affect the actual
+terminal dimensions; verify rows in the live terminal if an application requires
+a minimum. Wisp does not use Kitty remote control or enforce a row/column minimum.
+Other Hyprland actions retain 900×600. macOS retains its default Kitty 70c×38c
+(or environment overrides); an explicit `terminal_rows` changes only that action's
+initial Kitty height there as well.
+
 Run actions directly:
 
 ```bash
@@ -194,8 +226,10 @@ wisp bindings hyprland
 
 For macOS/Aerospace this emits an `alt-space` Wisp mode and a hint. For
 Linux/Hyprland this emits an `ALT+SPACE` submap and a hint. In both cases,
-action keys run `wisp action <id>`; `Space` still opens the palette, but the
-hint only shows direct keyed actions to avoid duplicating the palette contents.
+action keys run `wisp action <id>`. Search is not a prefix-menu option because it
+duplicates the direct actions. Space is consumed without leaving the mode or
+launching a palette; Escape remains the cancellation key. The standalone
+`wisp palette` command is still available when explicitly wanted.
 
 On macOS, `./install.sh` also installs `wisp-hint-macos` when `swiftc` is
 available. `wisp hint show` uses a native non-activating Hexware floater before
@@ -206,8 +240,10 @@ On Linux, `wisp-hint-linux` provides the equivalent passive native Wayland panel
 It runs in the overlay layer, reserves no screen space, and captures neither
 keyboard nor pointer input. The compositor owns the prefix/action/Escape keys;
 the helper only renders the selected catalog's labels. It is independent of the
-utility workspace. Search remains an optional Kitty/fzf palette on both systems.
-Linux hints also list `h` (hide overlay), `Space` (search), and `Esc` (cancel).
+utility workspace. The CLI palette still uses Kitty/fzf on both systems, but is
+not part of the native prefix menu. Hints show the catalog actions and `Esc`
+(cancel), without duplicate Search or Hide controls. The explicit `wisp hide`
+CLI command remains available for overlay management.
 
 The Linux helper uses **system `/usr/bin/python3`**, PyGObject, Pycairo, GTK 3 and
 gtk-layer-shell. On Arch-family hosts:
@@ -348,6 +384,8 @@ wisp bindings hyprland
 | `WISP_LAYOUT` | Surface metadata; Linux layout is selected explicitly by action/CLI, not inherited |
 | `WISP_SHELL` | Shell used by `wisp --terminal`; defaults to `$SHELL`, then `/bin/zsh` |
 | `WISP_BACKEND` | Override backend: `auto`, `aerospace`, `hyprland`, or `kitty` |
+| `WISP_KITTY_WIDTH` | Initial Kitty width for Hyprland/macOS; default `70c` (Hyprland controller normally prefers 900 logical pixels) |
+| `WISP_KITTY_HEIGHT` | Initial Kitty height for Hyprland/macOS; default `38c`; per-action `terminal_rows` takes precedence (ordinary Hyprland actions still prefer 600 logical pixels) |
 | `WISP_HYPRLAND_WORKSPACE` | Hyprland special workspace name; defaults to `wisp` |
 | `WISP_ACTIONS_PATH` | Catalog override; Linux prefers existing `actions.linux.toml`, otherwise `actions.toml` |
 | `WISP_LOG_PATH` | Log path for palette actions; defaults to `~/.cache/wisp/wisp.log` |
