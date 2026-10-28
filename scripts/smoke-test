@@ -8,6 +8,15 @@ mkdir -p "$tmp_dir"
 
 bash -n "$repo_root/completions/bash/wisp"
 zsh -n "$repo_root/completions/zsh/_wisp"
+if [[ "$(uname -s)" == "Linux" ]]; then
+  PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest discover -s "$repo_root/cmd/wisp-hint-linux" -p 'test_*.py'
+  /usr/bin/python3 "$repo_root/cmd/wisp-hint-linux/main.py" --help >/dev/null
+  if /usr/bin/python3 "$repo_root/cmd/wisp-hint-linux/main.py" --check; then
+    printf 'Linux hint dependencies available (no UI launched)\n'
+  else
+    printf 'Linux hint dependency check unavailable; native UI requires python-gobject gtk3 gtk-layer-shell\n' >&2
+  fi
+fi
 go test ./...
 go build -o "$tmp_dir/wisp" ./cmd/wisp
 if [[ "$(uname -s)" == "Darwin" ]] && command -v swiftc >/dev/null 2>&1; then

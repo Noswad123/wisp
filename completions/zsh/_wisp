@@ -9,6 +9,8 @@ _wisp() {
     'action:run an action from the Wisp catalog'
     'actions:inspect or initialize the Wisp action catalog'
     'palette:open the Wisp action palette'
+    'show:reveal the Hyprland utility overlay'
+    'hide:hide the Hyprland overlay without closing applications'
     'bindings:print hotkey binding snippets'
     'hint:show Wisp mode key hints'
     'daemon:manage the Wisp daemon'
@@ -29,6 +31,7 @@ _wisp() {
     '--title[human title label]:title:' \
     '--dir[working directory]:directory:_files -/' \
     '--path[path used to infer title and working directory]:path:_files' \
+    '--layout[explicit surface layout]:layout:(floating fullscreen)' \
     '1:command: _describe -t commands "commands" commands' \
     '*::arguments:_normal'
 }

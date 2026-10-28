@@ -13,7 +13,9 @@ It is part of the Jamal Arcana ecosystem, but it is intentionally generic: `wisp
 ```
 
 The installer builds the Go CLI from `./cmd/wisp` and installs the resulting
-binary.
+binary with the platform hint helper: Swift/Cocoa on macOS (when `swiftc` is
+available), or Python/GTK layer-shell on Linux. `make build` also puts the helper
+beside `bin/wisp` for testing without installation.
 
 By default this installs to `~/.local/bin`. Override with:
 
@@ -55,6 +57,8 @@ wisp actions init
 wisp actions list
 wisp action scratch
 wisp palette
+wisp show  # Hyprland: ensure the utility overlay is visible
+wisp hide  # Hyprland: hide the overlay without closing its applications
 
 # Daemon-backed action/session control.
 wisp daemon start
@@ -72,6 +76,20 @@ wisp hint close
 ```
 
 Legacy `wisp <command> [args...]` and `wisp --terminal` remain supported.
+
+### Hyprland compatibility
+
+Runtime launches (including the palette) and summon focus/toggle operations support
+both legacy Hyprlang and Lua configuration providers. Wisp detects the provider
+using read-only `hyprctl -j systeminfo` / `hyprctl systeminfo` queries; it does not
+probe by dispatching commands. Older versions without a provider field retain
+legacy dispatch syntax. Lua launches use `hl.dsp.exec_cmd` with a rule table;
+shell command arguments and Lua strings are quoted separately.
+
+`wisp rules hyprland` and `wisp bindings hyprland` still generate **legacy
+hyprland.conf syntax only**, not Lua configuration. Lua config/rule generation is
+deferred; do not paste those snippets into `hyprland.lua`. Runtime support does
+not require generated snippets.
 
 ## Actions and palette
 
@@ -114,6 +132,38 @@ Kitty surface, and Hyprland maps fullscreen actions to a fullscreen one-shot
 rule. Use `kind = "exec"` for GUI/menu handoff actions that should be selected
 from the palette but should not create their own Wisp terminal.
 
+### Per-action initial terminal height
+
+Floating terminal actions (`summon`, `run`, or `shell`) may opt into a Kitty
+cell-based initial height:
+
+```toml
+terminal_rows = 28
+```
+
+Add this key inside only the desired `[[action]]` table. It must be a positive
+integer; explicit zero/negative values, `kind = "exec"`, and fullscreen layout
+are rejected when launching the action. Omission retains existing behavior.
+No application names are special-cased, and no catalogs are changed by this option.
+
+Kitty receives `initial_window_height=28c`, overriding `WISP_KITTY_HEIGHT` for
+that action only, with remembered-size restoration disabled. On Hyprland, Wisp
+omits the conflicting 900×600 spawn size rule for opted-in actions. After clearing
+tile/fullscreen state it observes the normal mapped client height and uses that
+height, with the usual preferred 900 logical-pixel width, fitted to the monitor.
+Adopted tiled/fullscreen windows use their observed normal floating height too.
+Valid user-resized floats retain their geometry on later summons; this is not a
+periodic minimum-size policy.
+
+This is an **initial preference, not a guaranteed terminal row count**: monitor
+constraints can limit it, and compositor pixels do not measure TTY rows. A
+provisional mapped size or later client/compositor requests may affect the actual
+terminal dimensions; verify rows in the live terminal if an application requires
+a minimum. Wisp does not use Kitty remote control or enforce a row/column minimum.
+Other Hyprland actions retain 900×600. macOS retains its default Kitty 70c×38c
+(or environment overrides); an explicit `terminal_rows` changes only that action's
+initial Kitty height there as well.
+
 Run actions directly:
 
 ```bash
@@ -132,6 +182,16 @@ making Wisp the command palette while the window manager only handles key captur
 When `wispd` is available, client commands auto-start it and delegate action
 execution over a local Unix socket. Daemon output is appended to
 `~/.cache/wisp/wisp.log` by default.
+
+On Linux, an existing `actions.linux.toml` in Wisp's config directory takes
+precedence over `actions.toml`. `WISP_ACTIONS_PATH` overrides both. This lets Linux
+omit Aerospace-only actions and select floating defaults without changing macOS.
+Restart an existing daemon after changing its startup catalog/environment.
+
+Actions with `kind = "exec"` launch directly without Kitty, suitable for native
+menus and applications. A detached supervisor records their output and exit errors
+in the Wisp log; a successful launch acknowledges process start, not application
+completion. Terminal `run`/`shell`/`summon` actions use utility surfaces instead.
 
 ## Daemon and prefix bindings
 
@@ -169,14 +229,48 @@ wisp bindings hyprland
 
 For macOS/Aerospace this emits an `alt-space` Wisp mode and a hint. For
 Linux/Hyprland this emits an `ALT+SPACE` submap and a hint. In both cases,
-action keys run `wisp action <id>`; `Space` still opens the palette, but the
-hint only shows direct keyed actions to avoid duplicating the palette contents.
+action keys run `wisp action <id>`. Search is not a prefix-menu option because it
+duplicates the direct actions. Space is consumed without leaving the mode or
+launching a palette; Escape remains the cancellation key. The standalone
+`wisp palette` command is still available when explicitly wanted.
 
 On macOS, `./install.sh` also installs `wisp-hint-macos` when `swiftc` is
 available. `wisp hint show` uses a native non-activating Hexware floater before
 falling back to notifications. The floater stays up until `wisp hint close`
-runs, which generated prefix bindings do on action selection or `Esc`. Control
-the floater with:
+runs, which generated prefix bindings do on action selection or `Esc`.
+
+On Linux, `wisp-hint-linux` provides the equivalent passive native Wayland panel.
+It runs in the overlay layer, reserves no screen space, and captures neither
+keyboard nor pointer input. The compositor owns the prefix/action/Escape keys;
+the helper only renders the selected catalog's labels. It is independent of the
+utility workspace. The CLI palette still uses Kitty/fzf on both systems, but is
+not part of the native prefix menu. Hints show the catalog actions and `Esc`
+(cancel), without duplicate Search or Hide controls. The explicit `wisp hide`
+CLI command remains available for overlay management.
+
+The Linux helper uses **system `/usr/bin/python3`**, PyGObject, Pycairo, GTK 3 and
+gtk-layer-shell. On Arch-family hosts:
+
+```sh
+sudo pacman -S --needed python-gobject python-cairo gtk3 gtk-layer-shell
+wisp doctor
+```
+
+`wisp doctor` checks helper imports without opening a window. Native show waits
+for the helper's mapped-readiness signal and reports startup failures rather than
+silently substituting a notification. Prefix integrations should use session
+tokens to prevent delayed show/close operations from affecting a newer prefix:
+
+```sh
+wisp hint show --session TOKEN --state /absolute/runtime/state-file
+wisp hint close --session TOKEN
+```
+
+Publish `TOKEN` plus a newline atomically before show, and invalidate it
+synchronously on action/cancel. The dotfiles Lua integration implements this and
+generation-guards asynchronous failure recovery. Standalone show/close requires
+no session flags. The helper remains one foreground process; custom commands
+should use `exec` so close owns the actual renderer.
 
 | Variable | Purpose |
 | --- | --- |
@@ -184,9 +278,9 @@ the floater with:
 | `WISP_HINT_DURATION` | Optional seconds before auto-dismiss; default `0` means stay open until closed |
 | `WISP_HINT_WIDTH` | Floater width; default `760` |
 | `WISP_HINT_FONT_SIZE` | Monospace font size; default `15` |
-| `WISP_HINT_BACKEND` | `stdout` or `notification` to force a fallback backend |
+| `WISP_HINT_BACKEND` | `native` requires the native helper; `stdout` or `notification` forces an alternate backend |
 | `WISP_HINT_COMMAND` | Custom command that receives hint text on stdin |
-| `WISP_HINT_HELPER` | Override path to the macOS hint helper |
+| `WISP_HINT_HELPER` | Override path to the platform hint helper |
 
 ## Surface identity
 
@@ -240,8 +334,8 @@ wisp bindings aerospace
 ## Hyprland
 
 When `HYPRLAND_INSTANCE_SIGNATURE` and `hyprctl` are available, Wisp uses the
-Hyprland backend automatically. No static Hyprland rule is required; Wisp launches
-Kitty with one-shot rules that place the surface on a floating special workspace:
+Hyprland backend automatically. No static Hyprland rule is required. Wisp owns
+floating utility windows inside a dedicated special-workspace overlay:
 
 ```text
 special:wisp
@@ -253,8 +347,28 @@ Override the special workspace name with:
 WISP_HYPRLAND_WORKSPACE=scratch wisp summon scratch -- nvim ~/scratch.md
 ```
 
-Named `summon` surfaces try to focus an existing matching `wisp:<id>:` window
-before creating a new one. The Hyprland lookup parses `hyprctl -j clients`.
+Opening/summoning a surface means **ensure visible and raise**, never blind toggle.
+Wisp observes mapped clients and monitor state before reporting readiness. It
+uses silent workspace placement so a late launch cannot undo an explicit hide.
+Closing the palette closes only the palette: its selected terminal action is
+already mapped and presented before the palette exits. Launch errors remain
+visible with a retry prompt.
+
+Utilities default to floating, centered at a preferred 900×600 logical size fitted
+to the monitor. Valid user-resized floating geometry survives later summons;
+older tiled/fullscreen utilities are normalized when adopted. Fullscreen requires
+an explicit action `layout = "fullscreen"` or CLI `--layout fullscreen`; Linux
+does not inherit the parent utility's `WISP_LAYOUT` metadata as an instruction.
+
+Named `summon` surfaces reuse stable Wisp class identity (with older-title
+compatibility) rather than duplicate an existing window. Operations serialize
+across daemon and direct clients. A readiness timeout leaves a pending guard
+because the process may still map later; inspect the reported guard and compositor
+state before removing it or retrying a launch. Wisp does not kill uncertain apps.
+
+`wisp hide` hides only the utility overlay; `wisp show` reveals it idempotently.
+If already visible on another monitor, Wisp focuses it there. It does not poll
+continuously to fight an explicit user hide or unrelated compositor commands.
 
 Prefix-key submap bindings can be generated with:
 
@@ -270,16 +384,18 @@ wisp bindings hyprland
 | `WISP_ID` | Stable surface id |
 | `WISP_DIR` | Override working directory |
 | `WISP_PATH` | Path used to infer title and working directory |
-| `WISP_LAYOUT` | Surface layout hint: `floating` or `fullscreen` |
+| `WISP_LAYOUT` | Surface metadata; Linux layout is selected explicitly by action/CLI, not inherited |
 | `WISP_SHELL` | Shell used by `wisp --terminal`; defaults to `$SHELL`, then `/bin/zsh` |
 | `WISP_BACKEND` | Override backend: `auto`, `aerospace`, `hyprland`, or `kitty` |
+| `WISP_KITTY_WIDTH` | Initial Kitty width for Hyprland/macOS; default `70c` (Hyprland controller normally prefers 900 logical pixels) |
+| `WISP_KITTY_HEIGHT` | Initial Kitty height for Hyprland/macOS; default `38c`; per-action `terminal_rows` takes precedence (ordinary Hyprland actions still prefer 600 logical pixels) |
 | `WISP_HYPRLAND_WORKSPACE` | Hyprland special workspace name; defaults to `wisp` |
-| `WISP_ACTIONS_PATH` | Action catalog path; defaults to `~/.config/wisp/actions.toml` |
+| `WISP_ACTIONS_PATH` | Catalog override; Linux prefers existing `actions.linux.toml`, otherwise `actions.toml` |
 | `WISP_LOG_PATH` | Log path for palette actions; defaults to `~/.cache/wisp/wisp.log` |
 | `WISP_SOCKET_PATH` | Unix socket for `wispd`; defaults to `$XDG_RUNTIME_DIR/wispd.sock` or `/tmp/wisp-$UID/wispd.sock` |
 | `WISP_NO_DAEMON` | Run client commands directly without contacting or autostarting `wispd` |
 | `WISP_DAEMON_AUTOSTART` | Set to `0` to prevent client commands from starting `wispd` |
-| `WISP_HINT_POSITION` | Position for the macOS hint floater; defaults to `top-center` |
+| `WISP_HINT_POSITION` | Position for the native hint panel; defaults to `top-center` |
 | `WISP_HINT_DURATION` | Optional hint floater duration in seconds; defaults to `0`/sticky |
 
 ## Dependencies
@@ -290,6 +406,7 @@ wisp bindings hyprland
 - optional: Aerospace, for rule-based floating and named-surface focusing
 - optional: Hyprland + `hyprctl`, for Linux special-workspace surfaces
 - optional: Swift toolchain on macOS, for building the native hint floater
+- optional: system Python 3, PyGObject/Pycairo, GTK 3 and gtk-layer-shell, for the Linux native Wayland hint panel
 - Go, for building from source
 
 ## License

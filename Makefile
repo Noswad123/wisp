@@ -16,9 +16,13 @@ build:
 		echo "🔨 Building macOS hint floater..."; \
 		swiftc -O -o "$(BIN_DIR)/wisp-hint-macos" ./cmd/wisp-hint-macos/main.swift; \
 	fi
+	@if [ "$(UNAME_S)" = "Linux" ]; then \
+		install -m 0755 cmd/wisp-hint-linux/main.py "$(BIN_DIR)/wisp-hint-linux"; \
+	fi
 
 check:
 	go test ./...
+	PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest discover -s cmd/wisp-hint-linux -p 'test_*.py'
 
 fmt:
 	gofmt -w ./cmd/wisp/main.go
@@ -28,8 +32,10 @@ install: build
 	@mkdir -p "$(INSTALL_DIR)"
 	install -m 0755 "$(BIN_DIR)/$(APP_NAME)" "$(INSTALL_DIR)/$(APP_NAME)"
 	ln -sf "$(APP_NAME)" "$(INSTALL_DIR)/wispd"
-	@if [ -x "$(BIN_DIR)/wisp-hint-macos" ]; then \
+	@if [ "$(UNAME_S)" = "Darwin" ] && [ -x "$(BIN_DIR)/wisp-hint-macos" ]; then \
 		install -m 0755 "$(BIN_DIR)/wisp-hint-macos" "$(INSTALL_DIR)/wisp-hint-macos"; \
+	elif [ "$(UNAME_S)" = "Linux" ]; then \
+		install -m 0755 "$(BIN_DIR)/wisp-hint-linux" "$(INSTALL_DIR)/wisp-hint-linux"; \
 	fi
 	@if command -v xattr >/dev/null 2>&1; then \
 		xattr -d com.apple.quarantine "$(INSTALL_DIR)/$(APP_NAME)" 2>/dev/null || true; \
@@ -50,8 +56,8 @@ clean:
 help:
 	@echo "Available targets:"
 	@echo "  all     - Build wisp (default)"
-	@echo "  build   - Build bin/wisp, bin/wispd symlink, and macOS hint floater when available"
-	@echo "  check   - Run Go tests"
+	@echo "  build   - Build bin/wisp, bin/wispd symlink, and platform-native hint helper"
+	@echo "  check   - Run Go and headless Python tests"
 	@echo "  fmt     - Format Go sources"
 	@echo "  install - Build and install wisp, wispd symlink, optional hint floater, plus completions"
 	@echo "  smoke   - Run smoke test script"

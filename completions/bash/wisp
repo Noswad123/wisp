@@ -8,7 +8,7 @@ _wisp_completion() {
   prev="${COMP_WORDS[COMP_CWORD - 1]}"
 
   if [[ $COMP_CWORD -eq 1 ]]; then
-    local commands="run shell summon action actions palette bindings hint daemon doctor rules nvim vim less bash zsh waystone help --help -h --terminal -t"
+    local commands="run shell summon action actions palette show hide bindings hint daemon doctor rules nvim vim less bash zsh waystone help --help -h --terminal -t"
     COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
     return 0
   fi
@@ -40,16 +40,19 @@ _wisp_completion() {
 
   case "$cur" in
     --*)
-      COMPREPLY=( $(compgen -W "--id --title --dir --path --" -- "$cur") )
+      COMPREPLY=( $(compgen -W "--id --title --dir --path --layout --session --state --" -- "$cur") )
       return 0
       ;;
   esac
 
   case "$prev" in
-    --id|--title)
+    --id|--title|--session)
       COMPREPLY=()
       ;;
-    --dir|--path)
+    --layout)
+      COMPREPLY=( $(compgen -W "floating fullscreen" -- "$cur") )
+      ;;
+    --dir|--path|--state)
       COMPREPLY=( $(compgen -f -- "$cur") )
       ;;
     nvim|vim|less)
