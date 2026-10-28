@@ -106,10 +106,13 @@ Supported `kind` values:
 | `summon` | Named singleton surface; focus existing if possible, otherwise launch |
 | `run` | Launch a new Wisp surface |
 | `shell` | Launch a floating shell |
+| `exec` | Start the action command directly without wrapping it in a Wisp terminal surface |
 
 Actions may set `layout = "floating"` or `layout = "fullscreen"`. This is a
-backend hint; Aerospace applies it from inside the launched Kitty surface, and
-Hyprland maps fullscreen actions to a fullscreen one-shot rule.
+backend hint for surfaced actions; Aerospace applies it from inside the launched
+Kitty surface, and Hyprland maps fullscreen actions to a fullscreen one-shot
+rule. Use `kind = "exec"` for GUI/menu handoff actions that should be selected
+from the palette but should not create their own Wisp terminal.
 
 Run actions directly:
 

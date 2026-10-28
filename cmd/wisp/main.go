@@ -181,7 +181,7 @@ func runDirect(cfg envConfig, args []string) error {
 		if err != nil {
 			return err
 		}
-		return launchInvocation(cfg, inv)
+		return launchActionInvocation(cfg, inv)
 	}
 
 	inv, err := parseInvocation(cfg, args)
@@ -213,6 +213,13 @@ func launchActionDirect(cfg envConfig, id string) error {
 	inv, err := invocationFromAction(cfg, id)
 	if err != nil {
 		return err
+	}
+	return launchActionInvocation(cfg, inv)
+}
+
+func launchActionInvocation(cfg envConfig, inv invocation) error {
+	if inv.Mode == "exec" {
+		return launchExecAction(cfg, inv)
 	}
 	return launchInvocation(cfg, inv)
 }
@@ -683,10 +690,15 @@ func invocationFromAction(cfg envConfig, id string) (invocation, error) {
 			title = a.ID
 		}
 		inv := invocation{Mode: kind, ID: a.ID, Title: title, Layout: a.Layout}
-		if kind == "shell" {
+		switch kind {
+		case "shell":
 			inv.TerminalMode = true
 			inv.Command = cfg.shell
 			return inv, nil
+		case "summon", "run", "exec":
+			// handled below
+		default:
+			return inv, fmt.Errorf("action %q has unsupported kind %q", id, kind)
 		}
 		if len(a.Command) == 0 {
 			return inv, fmt.Errorf("action %q has no command", id)
@@ -698,6 +710,47 @@ func invocationFromAction(cfg envConfig, id string) (invocation, error) {
 		return inv, nil
 	}
 	return invocation{}, fmt.Errorf("action not found: %s", id)
+}
+
+func launchExecAction(cfg envConfig, inv invocation) error {
+	if inv.Command == "" {
+		return errors.New("missing command")
+	}
+	command, err := findExecutable(inv.Command)
+	if err != nil {
+		notify(cfg, fmt.Sprintf("%s was not found on PATH", inv.Command))
+		return fmt.Errorf("command not found: %s", inv.Command)
+	}
+
+	if inv.ID == "" {
+		inv.ID = slugify(inv.Command)
+	}
+	if inv.Title == "" {
+		inv.Title = inv.ID
+	}
+	if inv.WorkDir != "" {
+		inv.WorkDir = expand(inv.WorkDir)
+	} else if cwd, err := os.Getwd(); err == nil {
+		inv.WorkDir = cwd
+	}
+
+	cmd := exec.Command(command, inv.Args...)
+	if inv.WorkDir != "" {
+		cmd.Dir = inv.WorkDir
+	}
+	cmd.Env = append(os.Environ(),
+		"WISP=1",
+		"WISP_ID="+inv.ID,
+		"WISP_ROLE=exec",
+		"WISP_TITLE="+inv.Title,
+	)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() {
+		_ = cmd.Wait()
+	}()
+	return nil
 }
 
 func loadActions(path string) ([]action, error) {
