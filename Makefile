@@ -25,7 +25,7 @@ check:
 	PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest discover -s cmd/wisp-hint-linux -p 'test_*.py'
 
 fmt:
-	gofmt -w ./cmd/wisp/main.go
+	gofmt -w ./cmd/wisp/*.go
 
 install: build
 	@echo "📦 Installing to $(INSTALL_DIR)/$(APP_NAME)"

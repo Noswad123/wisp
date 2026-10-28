@@ -13,19 +13,6 @@ import (
 	"time"
 )
 
-func defaultActionsPath(platform, home string) string {
-	if override := os.Getenv("WISP_ACTIONS_PATH"); override != "" {
-		return override
-	}
-	if platform == "linux" {
-		path := filepath.Join(home, "actions.linux.toml")
-		if st, err := os.Stat(expand(path)); err == nil && !st.IsDir() {
-			return path
-		}
-	}
-	return filepath.Join(home, "actions.toml")
-}
-
 // All Wisp processes in one compositor session share this lock, regardless of
 // daemon/socket/config overrides. Never unlink a flock file (that splits locks).
 func overlaySessionPath(suffix string) string {

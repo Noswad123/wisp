@@ -409,6 +409,36 @@ wisp bindings hyprland
 - optional: system Python 3, PyGObject/Pycairo, GTK 3 and gtk-layer-shell, for the Linux native Wayland hint panel
 - Go, for building from source
 
+## Development
+
+The CLI lives in `cmd/wisp` as a single Go package, organized by responsibility:
+
+| Files | Responsibility |
+| --- | --- |
+| `main.go` | Entry point, command routing, and daemon delegation policy |
+| `config.go` | Environment configuration, runtime paths, and catalog selection |
+| `daemon.go` | Daemon lifecycle and Unix-socket request/response handling |
+| `invocation.go` | Invocation model, CLI option parsing, and validation |
+| `actions.go`, `palette.go` | Action catalogs and the interactive fzf palette |
+| `backend.go`, `backend_aerospace.go`, `backend_hyprland.go` | Launch orchestration and window-manager adapters |
+| `overlay.go` | Hyprland overlay state, serialization, and window presentation |
+| `exec_action.go` | Detached execution, supervision, and exit logging |
+| `hint.go`, `hint_native.go`, `hint_session.go` | Hint commands, native helper lifecycle, and session ownership |
+| `palette_context.go` | Environment propagation for the Hyprland palette |
+| `commands.go`, `process.go` | Help/diagnostic/configuration output and shared process helpers |
+
+Backend implementations stay in the same package and are selected at runtime;
+they are not restricted by OS-specific build tags. Build the package, not an
+individual source file:
+
+```bash
+go build ./cmd/wisp
+make fmt                  # Format all CLI Go sources and tests
+make check                # Go and headless Python tests
+go test -race ./...
+go vet ./...
+```
+
 ## License
 
 MIT © Jamal Dawson
