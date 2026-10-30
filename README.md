@@ -365,7 +365,30 @@ on-window-detected = [
 ]
 ```
 
-Wisp still keeps a best-effort post-launch `aerospace layout floating` fallback for compatibility.
+Wisp also performs a bounded, best-effort post-launch correction. It enumerates all
+windows and requires a unique **exact Kitty bundle ID and expected Wisp title**
+match, then applies `layout floating --window-id ID` (or idempotent
+`fullscreen on --window-id ID`). It never applies a launch-time layout command to
+the focused window. Missing, malformed or ambiguous matches leave other windows
+untouched, as do lookup failures and timeouts.
+
+The Kitty child shell only changes directory, exports Wisp metadata and executes
+the requested command; it does not run AeroSpace commands. This avoids a race in
+which a newly launched utility could float the original terminal before AeroSpace
+finished registering the new window. The direct CLI waits for correction rather
+than leaving it in an unjoined goroutine: `open` has a three-second timeout and
+window discovery/correction shares a separate three-second deadline. These are
+launch/layout checks, not proof the child application attached or rendered.
+
+The same-workspace original-terminal float regression has mocked coverage for
+delayed window discovery, focus changes, exact identity matching, ambiguous
+windows and command deadlines. `go test ./...`, `go test -race ./...` and
+`go vet ./...` passed. The corrected binary was installed in `~/.local/bin/wisp`
+on 2026-10-30 and verified against the build digest. Existing windows, AeroSpace
+configuration and the running daemon were left unchanged. Djinn's Open chat uses
+direct mode, so new launches pick up the fix without a daemon restart; existing
+daemon-mediated launch paths need a separately coordinated daemon restart to load
+new code. The reported same-workspace desktop scenario still needs a user retest.
 
 Prefix-key bindings can be generated with:
 

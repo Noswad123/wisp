@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
+	"time"
 )
 
 func launchInvocation(cfg envConfig, inv invocation) error {
@@ -29,9 +31,9 @@ func launchInvocation(cfg envConfig, inv invocation) error {
 		if err := launchMacKitty(cfg, inv); err != nil {
 			return err
 		}
-		if inv.Layout != "fullscreen" {
-			go postLaunchAerospaceFloat(inv.WindowTitle)
-		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		postLaunchAerospaceLayout(ctx, inv)
 		return nil
 	case "hyprland":
 		return withOverlayLock(func() error {
