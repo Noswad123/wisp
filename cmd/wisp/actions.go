@@ -146,7 +146,7 @@ id = "aero"
 title = "Aerospace Manager"
 kind = "summon"
 key = "a"
-command = ["zsh", "-lc", "aeros"]
+command = ["~/.local/lib/aeros"]
 
 [[action]]
 id = "terminal"

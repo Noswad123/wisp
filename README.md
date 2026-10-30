@@ -121,6 +121,12 @@ layout = "floating"
 command = ["nvim", "~/Projects/darkness/introspection/scratch.md"]
 ```
 
+For local scripts, prefer an explicit path over a shell command string. The
+starter Aerospace Manager action uses `command = ["~/.local/lib/aeros"]`;
+adjust it if your selector is installed elsewhere. GUI-launched terminals do
+not necessarily inherit your interactive shell's PATH, and `zsh -lc` does not
+load `.zshrc`. Existing catalogs are not updated by `wisp actions init`.
+
 Supported `kind` values:
 
 | Kind | Behavior |
