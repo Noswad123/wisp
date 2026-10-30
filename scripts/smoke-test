@@ -35,9 +35,11 @@ actions_path="$(WISP_ACTIONS_PATH="$tmp_dir/actions.toml" "$tmp_dir/wisp" action
 [[ "$actions_path" == "$tmp_dir/actions.toml" ]]
 WISP_ACTIONS_PATH="$tmp_dir/actions.toml" "$tmp_dir/wisp" bindings aerospace >/dev/null
 WISP_ACTIONS_PATH="$tmp_dir/actions.toml" "$tmp_dir/wisp" bindings hyprland >/dev/null
-hint_output="$(WISP_HINT_BACKEND=stdout WISP_ACTIONS_PATH="$tmp_dir/actions.toml" "$tmp_dir/wisp" hint)"
-[[ "$hint_output" == *Wisp* && "$hint_output" == *Scratch* ]]
-WISP_HINT_PID_PATH="$tmp_dir/hint.pid" "$tmp_dir/wisp" hint close
+palette_output="$(WISP_HINT_BACKEND=stdout WISP_HINT_PID_PATH="$tmp_dir/hint.pid" WISP_ACTIONS_PATH="$tmp_dir/actions.toml" "$tmp_dir/wisp" palette)"
+[[ "$palette_output" == *Wisp* && "$palette_output" == *Scratch* ]]
+hint_output="$(WISP_ACTIONS_PATH="$tmp_dir/actions.toml" "$tmp_dir/wisp" hint text)"
+[[ "$hint_output" == "$palette_output" ]]
+WISP_HINT_PID_PATH="$tmp_dir/hint.pid" "$tmp_dir/wisp" palette close
 WISP_SOCKET_PATH="$tmp_dir/wispd.sock" WISP_LOG_PATH="$tmp_dir/wisp.log" "$tmp_dir/wisp" daemon start >/dev/null
 WISP_SOCKET_PATH="$tmp_dir/wispd.sock" WISP_LOG_PATH="$tmp_dir/wisp.log" "$tmp_dir/wisp" daemon status >/dev/null
 WISP_SOCKET_PATH="$tmp_dir/wispd.sock" WISP_LOG_PATH="$tmp_dir/wisp.log" "$tmp_dir/wisp" daemon stop >/dev/null

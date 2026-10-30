@@ -17,7 +17,7 @@ func paletteBody(cfg envConfig) error {
 			return nil
 		}
 		logLine(cfg, "palette error: %v", err)
-		fmt.Fprintf(os.Stderr, "\nWisp: %v\nPress Enter to retry (Ctrl-C to cancel).\n", err)
+		fmt.Fprintf(os.Stderr, "\nWisp Menu: %v\nPress Enter to retry (Ctrl-C to cancel).\n", err)
 		if _, readErr := bufio.NewReader(os.Stdin).ReadString('\n'); readErr != nil {
 			return err
 		}
@@ -26,7 +26,7 @@ func paletteBody(cfg envConfig) error {
 
 func paletteAttempt(cfg envConfig) error {
 	if _, err := exec.LookPath("fzf"); err != nil {
-		return errors.New("fzf is required for wisp palette")
+		return errors.New("fzf is required for wisp menu")
 	}
 
 	actions, err := loadActions(cfg.actionsPath)
@@ -59,7 +59,7 @@ func paletteAttempt(cfg envConfig) error {
 		if errors.As(err, &exit) && (exit.ExitCode() == 1 || exit.ExitCode() == 130) {
 			return nil
 		}
-		return fmt.Errorf("fzf: %w", err)
+		return fmt.Errorf("wisp menu fzf: %w", err)
 	}
 	selection := strings.TrimSpace(out.String())
 	if selection == "" {
@@ -68,8 +68,10 @@ func paletteAttempt(cfg envConfig) error {
 	actionID := strings.SplitN(selection, "\t", 2)[0]
 	logLine(cfg, "palette selected action=%s", actionID)
 	logLine(cfg, "palette launching action=%s", actionID)
-	if err := run(cfg, []string{"action", actionID}); err != nil {
-		return fmt.Errorf("palette action %q: %w", actionID, err)
+	// Even a daemon-launched Menu owns its resolved catalog. Delegating only the
+	// selected ID could execute a different action from the daemon's startup catalog.
+	if err := launchActionDirect(cfg, actionID); err != nil {
+		return fmt.Errorf("menu action %q: %w", actionID, err)
 	}
 	return nil
 }

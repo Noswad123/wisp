@@ -74,24 +74,26 @@ func TestNativePrefixBindingsConsumeSpace(t *testing.T) {
 		want           []string
 	}{
 		{"aerospace", "space = 'mode wisp'", []string{
-			"alt-space = ['exec-and-forget wisp hint show', 'mode wisp']",
-			"esc = ['exec-and-forget wisp hint close', 'mode main']",
-			"n = ['exec-and-forget wisp hint close', 'exec-and-forget wisp action notes', 'mode main']",
+			"alt-space = ['exec-and-forget wisp palette show', 'mode wisp']",
+			"esc = ['exec-and-forget wisp palette close', 'mode main']",
+			"n = ['exec-and-forget wisp palette close', 'exec-and-forget wisp action notes', 'mode main']",
 		}},
 		{"hyprland", "bind = , SPACE, submap, wisp", []string{
-			"bind = ALT, SPACE, exec, wisp hint show",
+			"bind = ALT, SPACE, exec, wisp palette show",
 			"bind = ALT, SPACE, submap, wisp",
-			"bind = , ESCAPE, exec, wisp hint close",
+			"bind = , ESCAPE, exec, wisp palette close",
 			"bind = , ESCAPE, submap, reset",
-			"bind = , N, exec, sh -lc 'wisp hint close; wisp action notes'",
+			"bind = , N, exec, sh -lc 'wisp palette close; wisp action notes'",
 			"bind = , N, submap, reset",
 			"submap = reset",
 		}},
 	} {
 		t.Run(tc.backend, func(t *testing.T) {
 			got := capturePrefixBindings(t, cfg, tc.backend)
-			if strings.Contains(got, "palette") || strings.Contains(got, "reserved-") {
-				t.Fatalf("unexpected palette or reserved action dispatch: %s", got)
+			for _, forbidden := range []string{"wisp menu", "wisp hint", "_palette", "search", "reserved-"} {
+				if strings.Contains(strings.ToLower(got), forbidden) {
+					t.Fatalf("unexpected terminal menu, search, or reserved action dispatch: %s", got)
+				}
 			}
 			spaceCount := 0
 			for _, line := range strings.Split(got, "\n") {

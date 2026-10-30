@@ -108,19 +108,19 @@ func TestHintSessionOldCloseAndShowCannotTouchNewPanel(t *testing.T) {
 	old := &hintSession{Token: "abc-1", StatePath: state}
 	newer := &hintSession{Token: "abc-2", StatePath: state}
 	publishTestHintSession(t, state, old.Token)
-	if err := hintCommand(cfg, []string{"show", "--session", old.Token, "--state", state}); err != nil {
+	if err := runDirect(cfg, []string{"hint", "show", "--session", old.Token, "--state", state}); err != nil {
 		t.Fatal(err)
 	}
 	publishTestHintSession(t, state, "") // Esc queues old close, but it is delayed.
 	publishTestHintSession(t, state, newer.Token)
-	if err := hintCommand(cfg, []string{"show", "--session", newer.Token, "--state", state}); err != nil {
+	if err := runDirect(cfg, []string{"palette", "show", "--session", newer.Token, "--state", state}); err != nil {
 		t.Fatal(err)
 	}
 	before := readTestHintRecord(t, cfg)
 	if before.Session != newer.Token {
 		t.Fatalf("wrong generation: %+v", before)
 	}
-	if err := hintCommand(cfg, []string{"close", "--session", old.Token}); err != nil {
+	if err := runDirect(cfg, []string{"palette", "close", "--session", old.Token}); err != nil {
 		t.Fatal(err)
 	}
 	if err := showHintForSession(cfg, "old queued show", old); err != nil {
@@ -134,7 +134,7 @@ func TestHintSessionOldCloseAndShowCannotTouchNewPanel(t *testing.T) {
 	if err != nil || start != after.Start {
 		t.Fatalf("old close killed new process: %s %v", start, err)
 	}
-	if err := closeHintForSession(cfg, newer.Token); err != nil {
+	if err := runDirect(cfg, []string{"palette", "close", "--session", newer.Token}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(cfg.hintPIDPath); !os.IsNotExist(err) {

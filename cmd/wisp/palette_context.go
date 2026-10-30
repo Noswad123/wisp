@@ -10,8 +10,12 @@ func hyprlandChildArgs(cfg envConfig, inv invocation) []string {
 	if len(inv.OriginalArgs) != 2 || inv.OriginalArgs[0] != cfg.self || inv.OriginalArgs[1] != "_palette" {
 		return inv.OriginalArgs
 	}
+	args := append([]string{"env"}, paletteContextEnv(cfg)...)
+	return append(args, inv.OriginalArgs...)
+}
+
+func paletteContextEnv(cfg envConfig) []string {
 	args := []string{
-		"env",
 		"WISP_ACTIONS_PATH=" + cfg.actionsPath,
 		"WISP_SOCKET_PATH=" + cfg.socketPath,
 		"WISP_LOG_PATH=" + cfg.logPath,
@@ -30,5 +34,5 @@ func hyprlandChildArgs(cfg envConfig, inv invocation) []string {
 	for _, key := range []string{"WISP_NO_DAEMON", "WISP_DAEMON_BYPASS", "WISP_DAEMON_AUTOSTART", "FZF_DEFAULT_OPTS", "FZF_DEFAULT_OPTS_FILE"} {
 		args = append(args, key+"="+os.Getenv(key))
 	}
-	return append(args, inv.OriginalArgs...)
+	return args
 }

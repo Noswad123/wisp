@@ -2,6 +2,8 @@
 
 ![Wisp](img/wisp.png)
 
+## Overview
+
 `wisp` opens a command in a floating utility surface.
 
 It is part of the Jamal Arcana ecosystem, but it is intentionally generic: `wisp` presents whatever command it receives and does not know about any specific companion tool. Window-manager integration should key off Wisp's stable surface identity instead of guessing that an arbitrary terminal window is special.
@@ -38,7 +40,7 @@ WISP_BASH_COMPLETION_DIR=/path/to/bash-completion ./install.sh
 WISP_INSTALL_COMPLETIONS=0 ./install.sh
 ```
 
-## Usage
+## Example usage
 
 ```bash
 wisp --terminal
@@ -52,11 +54,12 @@ wisp run --id edit -- nvim README.md
 # existing wisp:scratch window is preferred over creating a duplicate.
 wisp summon scratch -- nvim ~/Projects/darkness/introspection/scratch.md
 
-# Action catalog and palette.
+# Action catalog, native Palette, and secondary CLI menu.
 wisp actions init
 wisp actions list
 wisp action scratch
 wisp palette
+wisp menu # Explicit Kitty/fzf interface, not the native Palette
 wisp show  # Hyprland: ensure the utility overlay is visible
 wisp hide  # Hyprland: hide the overlay without closing its applications
 
@@ -71,15 +74,16 @@ wisp rules aerospace
 wisp rules hyprland
 wisp bindings aerospace
 wisp bindings hyprland
-wisp hint show
-wisp hint close
+wisp palette show
+wisp palette close
+wisp palette text
 ```
 
 Legacy `wisp <command> [args...]` and `wisp --terminal` remain supported.
 
 ### Hyprland compatibility
 
-Runtime launches (including the palette) and summon focus/toggle operations support
+Runtime surface launches (including `wisp menu`) and summon focus/toggle operations support
 both legacy Hyprlang and Lua configuration providers. Wisp detects the provider
 using read-only `hyprctl -j systeminfo` / `hyprctl systeminfo` queries; it does not
 probe by dispatching commands. Older versions without a provider field retain
@@ -91,7 +95,7 @@ hyprland.conf syntax only**, not Lua configuration. Lua config/rule generation i
 deferred; do not paste those snippets into `hyprland.lua`. Runtime support does
 not require generated snippets.
 
-## Actions and palette
+## Actions and Palette
 
 Wisp can also act as a small Raycast/Tuna-like launcher. Actions live in:
 
@@ -170,18 +174,51 @@ Run actions directly:
 wisp action scratch
 ```
 
-Open the searchable action palette:
+### API / Interfaces
+
+Show the native passive prefix **Palette**:
 
 ```bash
 wisp palette
 ```
 
-`wisp palette` launches a Wisp surface running `fzf`; selecting an action runs
-`wisp action <id>`. A window manager can bind a global key to `wisp palette`,
-making Wisp the command palette while the window manager only handles key capture.
-When `wispd` is available, client commands auto-start it and delegate action
-execution over a local Unix socket. Daemon output is appended to
-`~/.cache/wisp/wisp.log` by default.
+`wisp palette [show|close|text]` uses the native helper (`show` by default);
+`text` prints its labels. It never daemon-delegates, captures keys, or enters a
+compositor mode by itself. `wisp hint` remains a compatibility alias.
+
+`wisp menu` is the explicit secondary searchable Kitty/fzf CLI interface.
+Both interfaces use the same action catalog and canonical action resolver;
+the compositor owns native Palette key capture. CLI Menu selection calls
+`launchActionDirect(cfg, id)` locally against the catalog the picker displayed,
+even when a daemon launched the Menu surface. It does not delegate the selected
+ID to a potentially different daemon catalog. Standalone `wisp action <id>`
+delegation policy is unchanged, as are overlay locks, failure recovery and exec
+supervision. The menu client delegates the **surface launch** using the existing
+request, understood by older daemons:
+
+```text
+run --id palette --title 'Wisp Menu' --path '' --dir '' --layout '' -- /usr/bin/env -- <client context assignments> <client self> _palette
+```
+
+This is an argv schematic, not a command to paste. The launch command is
+`/usr/bin/env`, whose first argument is `--` to avoid target-path inference.
+`paletteContextEnv` supplies the **client's resolved** `WISP_ACTIONS_PATH`,
+`WISP_SOCKET_PATH`, `WISP_LOG_PATH`, `WISP_SELF`, `WISP_CONFIG_HOME`,
+`WISP_CACHE_HOME`, `WISP_HINT_PID_PATH`, `WISP_SHELL`, `WISP_BACKEND`,
+`WISP_HYPRLAND_WORKSPACE`, `WISP_KITTY_WIDTH` and `WISP_KITTY_HEIGHT`.
+It also supplies caller values for `WISP_NO_DAEMON`, `WISP_DAEMON_BYPASS`,
+`WISP_DAEMON_AUTOSTART`, `FZF_DEFAULT_OPTS` and `FZF_DEFAULT_OPTS_FILE`, including
+explicit empty assignments when unset. The final command is the client executable
+plus `_palette`, not the daemon's executable. This preserves caller context with
+older or different-path daemons without broadening the strict Hyprland
+ordinary-child context guard. The earlier direct-client-self-only delegation
+payload is superseded by this wrapper.
+
+No new protocol or daemon restart is needed just for this rename. Internal
+`_palette`, surface ID `palette`, mode `run`, `WISP_HINT_*`, helper names and
+PID/overlay state are intentionally unchanged. Eligible action/surface commands
+auto-start and delegate to `wispd` over a local Unix socket; daemon output defaults
+to `~/.cache/wisp/wisp.log`.
 
 On Linux, an existing `actions.linux.toml` in Wisp's config directory takes
 precedence over `actions.toml`. `WISP_ACTIONS_PATH` overrides both. This lets Linux
@@ -193,14 +230,17 @@ menus and applications. A detached supervisor records their output and exit erro
 in the Wisp log; a successful launch acknowledges process start, not application
 completion. Terminal `run`/`shell`/`summon` actions use utility surfaces instead.
 
-## Daemon and prefix bindings
+## Data Flow
+
+### Daemon and prefix bindings
 
 Wisp uses a split architecture for modal hotkeys:
 
 ```text
 window manager/compositor captures Option+Space or Alt+Space
-  -> wisp client opens palette or sends an action request
-  -> wispd daemon executes/focuses/summons the surface
+  -> compositor shows native Palette AND enters its Wisp mode/submap
+  -> action key closes Palette, dispatches wisp action <id>, exits mode
+  -> wispd executes the action (exec launches directly; others use surfaces)
 ```
 
 Start or inspect the daemon with:
@@ -227,24 +267,24 @@ wisp bindings aerospace
 wisp bindings hyprland
 ```
 
-For macOS/Aerospace this emits an `alt-space` Wisp mode and a hint. For
-Linux/Hyprland this emits an `ALT+SPACE` submap and a hint. In both cases,
+For macOS/Aerospace this emits an `alt-space` Wisp mode and Palette show/close.
+For Linux/Hyprland this emits an `ALT+SPACE` submap and Palette show/close. In both cases,
 action keys run `wisp action <id>`. Search is not a prefix-menu option because it
 duplicates the direct actions. Space is consumed without leaving the mode or
-launching a palette; Escape remains the cancellation key. The standalone
-`wisp palette` command is still available when explicitly wanted.
+launching the CLI menu; Escape closes Palette and cancels the mode. Binding only
+`wisp palette` is insufficient: the compositor must also enter mode.
 
 On macOS, `./install.sh` also installs `wisp-hint-macos` when `swiftc` is
-available. `wisp hint show` uses a native non-activating Hexware floater before
-falling back to notifications. The floater stays up until `wisp hint close`
+available. `wisp palette show` uses a native non-activating Hexware floater before
+falling back to notifications. The floater stays up until `wisp palette close`
 runs, which generated prefix bindings do on action selection or `Esc`.
 
 On Linux, `wisp-hint-linux` provides the equivalent passive native Wayland panel.
 It runs in the overlay layer, reserves no screen space, and captures neither
 keyboard nor pointer input. The compositor owns the prefix/action/Escape keys;
 the helper only renders the selected catalog's labels. It is independent of the
-utility workspace. The CLI palette still uses Kitty/fzf on both systems, but is
-not part of the native prefix menu. Hints show the catalog actions and `Esc`
+utility workspace. The CLI `wisp menu` still uses Kitty/fzf on both systems, but is
+not part of the native Palette. Palette labels show keyed catalog actions and `Esc`
 (cancel), without duplicate Search or Hide controls. The explicit `wisp hide`
 CLI command remains available for overlay management.
 
@@ -256,14 +296,16 @@ sudo pacman -S --needed python-gobject python-cairo gtk3 gtk-layer-shell
 wisp doctor
 ```
 
+### Edge Cases
+
 `wisp doctor` checks helper imports without opening a window. Native show waits
 for the helper's mapped-readiness signal and reports startup failures rather than
 silently substituting a notification. Prefix integrations should use session
 tokens to prevent delayed show/close operations from affecting a newer prefix:
 
 ```sh
-wisp hint show --session TOKEN --state /absolute/runtime/state-file
-wisp hint close --session TOKEN
+wisp palette show --session TOKEN --state /absolute/runtime/state-file
+wisp palette close --session TOKEN
 ```
 
 Publish `TOKEN` plus a newline atomically before show, and invalidate it
@@ -350,8 +392,8 @@ WISP_HYPRLAND_WORKSPACE=scratch wisp summon scratch -- nvim ~/scratch.md
 Opening/summoning a surface means **ensure visible and raise**, never blind toggle.
 Wisp observes mapped clients and monitor state before reporting readiness. It
 uses silent workspace placement so a late launch cannot undo an explicit hide.
-Closing the palette closes only the palette: its selected terminal action is
-already mapped and presented before the palette exits. Launch errors remain
+Closing the CLI menu closes only its surface: its selected terminal action is
+already mapped and presented before the menu exits. Launch errors remain
 visible with a retry prompt.
 
 Utilities default to floating, centered at a preferred 900×600 logical size fitted
@@ -391,7 +433,7 @@ wisp bindings hyprland
 | `WISP_KITTY_HEIGHT` | Initial Kitty height for Hyprland/macOS; default `38c`; per-action `terminal_rows` takes precedence (ordinary Hyprland actions still prefer 600 logical pixels) |
 | `WISP_HYPRLAND_WORKSPACE` | Hyprland special workspace name; defaults to `wisp` |
 | `WISP_ACTIONS_PATH` | Catalog override; Linux prefers existing `actions.linux.toml`, otherwise `actions.toml` |
-| `WISP_LOG_PATH` | Log path for palette actions; defaults to `~/.cache/wisp/wisp.log` |
+| `WISP_LOG_PATH` | Log path for menu/actions; defaults to `~/.cache/wisp/wisp.log` |
 | `WISP_SOCKET_PATH` | Unix socket for `wispd`; defaults to `$XDG_RUNTIME_DIR/wispd.sock` or `/tmp/wisp-$UID/wispd.sock` |
 | `WISP_NO_DAEMON` | Run client commands directly without contacting or autostarting `wispd` |
 | `WISP_DAEMON_AUTOSTART` | Set to `0` to prevent client commands from starting `wispd` |
@@ -401,8 +443,8 @@ wisp bindings hyprland
 ## Dependencies
 
 - macOS `open`
-- kitty
-- optional: fzf, for `wisp palette`
+- kitty, for terminal surfaces and `wisp menu` (not native Palette/direct exec)
+- optional: fzf, for `wisp menu`
 - optional: Aerospace, for rule-based floating and named-surface focusing
 - optional: Hyprland + `hyprctl`, for Linux special-workspace surfaces
 - optional: Swift toolchain on macOS, for building the native hint floater
@@ -419,12 +461,12 @@ The CLI lives in `cmd/wisp` as a single Go package, organized by responsibility:
 | `config.go` | Environment configuration, runtime paths, and catalog selection |
 | `daemon.go` | Daemon lifecycle and Unix-socket request/response handling |
 | `invocation.go` | Invocation model, CLI option parsing, and validation |
-| `actions.go`, `palette.go` | Action catalogs and the interactive fzf palette |
+| `actions.go`, `palette.go` | Action catalogs and the interactive fzf CLI menu (internal name retained) |
 | `backend.go`, `backend_aerospace.go`, `backend_hyprland.go` | Launch orchestration and window-manager adapters |
 | `overlay.go` | Hyprland overlay state, serialization, and window presentation |
 | `exec_action.go` | Detached execution, supervision, and exit logging |
-| `hint.go`, `hint_native.go`, `hint_session.go` | Hint commands, native helper lifecycle, and session ownership |
-| `palette_context.go` | Environment propagation for the Hyprland palette |
+| `hint.go`, `hint_native.go`, `hint_session.go` | Native Palette/compatibility hint commands, helper lifecycle, and session ownership |
+| `palette_context.go` | Environment propagation for the Hyprland CLI menu |
 | `commands.go`, `process.go` | Help/diagnostic/configuration output and shared process helpers |
 
 Backend implementations stay in the same package and are selected at runtime;
@@ -438,6 +480,45 @@ make check                # Go and headless Python tests
 go test -race ./...
 go vet ./...
 ```
+
+### Numen integration test
+
+Opt in with an absolute path to an existing Numen executable (otherwise the test
+skips):
+
+```bash
+CGO_ENABLED=0 NUMEN_TEST_BINARY="$HOME/.local/bin/numen" go test ./cmd/wisp -run '^TestNumenActionIntegration$' -count=1
+```
+
+This runs actual `numen wisp-action` preview and explicit temporary-catalog
+installation, checks idempotence, and loads/resolves the result through Wisp's
+action pipeline. It verifies `kind = "exec"`, `key = "n"`, exact three-element
+quoted/Unicode argv `[absoluteExecutable, "--socket", absoluteSocket]` (no `menu`), and
+leading `--socket` preserving cwd without a target path. It does not launch a
+palette, terminal or Numen service, or modify the home catalog. See Numen's
+[Wisp integration guide](../numen/WISP.md) for opt-in setup, path restrictions and
+[UI-to-wire validation boundaries](../numen/WISP.md#wisp-integration-validation).
+
+### Related files and Numen usage
+
+The optional generated Numen action launches bare Numen directly: native Palette
+key **n** opens one unattached familiar, reusing/bootstrap-starting its service;
+repeat adds views up to 16. Attach to a supported live app/chat through the
+familiar's click menu. No Kitty/fzf is needed for this default. Explicit
+`numen menu` remains an advanced TTY interface and requires Wisp `run`/`summon`,
+not the default `exec` entry. See the canonical [Numen Wisp guide](../numen/WISP.md)
+for strict installer migration, local on-disk/reload status, tests and pending
+manual acceptance. Command routing is in `cmd/wisp/main.go`, generated bindings
+in `commands.go`, native rendering in `hint*.go`, and CLI selection in `palette.go`.
+
+Updated Wisp (native helper/completions included) and debug Numen installation
+are confirmed. Final Go tests/vet with CGO disabled, 14 headless Python helper
+tests, shell syntax checks and the installed Numen contract test passed. The
+installed direct-exec smoke opened two native unattached views in one prestarted
+private service without Kitty/fzf; it proves reuse, not offline bootstrap or
+physical Palette key delivery. AeroSpace `n` is on disk but **not yet active**:
+review unrelated music-workspace edits before explicitly reloading. See the
+[canonical evidence and manual requirements](../numen/WISP.md#wisp-integration-validation).
 
 ## License
 

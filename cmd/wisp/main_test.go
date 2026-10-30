@@ -381,7 +381,7 @@ func TestDaemonOverlayProtocol(t *testing.T) {
 	}
 }
 
-func TestPaletteHyprlandDispatch(t *testing.T) {
+func TestMenuHyprlandDispatch(t *testing.T) {
 	for _, provider := range []string{"lua", "hyprlang"} {
 		t.Run(provider, func(t *testing.T) {
 			calls := mockHyprctl(t, "configProvider: "+provider)
@@ -391,12 +391,12 @@ func TestPaletteHyprlandDispatch(t *testing.T) {
 			}
 			cfg := envConfig{backend: "hyprland", self: self, hyprWorkspace: "wisp"}
 			t.Setenv("WISP_TEST_SPAWNED", `[{"address":"0x123","class":"wisp-palette","mapped":true,"floating":true,"size":[900,600],"workspace":{"name":"special:wisp"}}]`)
-			if err := runDirect(cfg, []string{"palette"}); err != nil {
+			if err := runDirect(cfg, []string{"menu"}); err != nil {
 				t.Fatal(err)
 			}
 			got := calls()
-			if len(got) < 3 || got[2][0] != "dispatch" || !strings.Contains(strings.Join(got[2], " "), "_palette") {
-				t.Fatalf("palette did not use launch dispatch: %q", got)
+			if len(got) < 3 || got[2][0] != "dispatch" || !strings.Contains(strings.Join(got[2], " "), "_palette") || !strings.Contains(strings.Join(got[2], " "), "Wisp Menu") || !strings.Contains(strings.Join(got[2], " "), "wisp-palette") {
+				t.Fatalf("menu did not preserve terminal palette identity and launch dispatch: %q", got)
 			}
 		})
 	}
@@ -429,7 +429,7 @@ func TestPaletteLogsActionFailureBeforeRetry(t *testing.T) {
 	os.Stdin, os.Stderr = input, output
 	defer func() { os.Stdin, os.Stderr = stdin, stderr }()
 	err = paletteBody(cfg)
-	if err == nil || !strings.Contains(err.Error(), `palette action "broken"`) || !strings.Contains(err.Error(), "command not found") {
+	if err == nil || !strings.Contains(err.Error(), `menu action "broken"`) || !strings.Contains(err.Error(), "command not found") {
 		t.Fatalf("expected selected action error: %v", err)
 	}
 	log, readErr := os.ReadFile(cfg.logPath)

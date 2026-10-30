@@ -18,10 +18,11 @@ func usage(cfg envConfig, w io.Writer) {
   %[1]s summon <id> [--title TITLE] [--dir DIR] [--path PATH] -- <command> [args...]
   %[1]s action <id>
   %[1]s actions [list|init|path]
-  %[1]s palette
+  %[1]s palette [show|close|text]  Native prefix Palette (default: show).
+  %[1]s menu                       Terminal/fzf Wisp Menu.
   %[1]s show|hide
   %[1]s bindings [aerospace|hyprland]
-  %[1]s hint [show|close|text]
+  %[1]s hint [show|close|text]     Compatibility alias for palette.
   %[1]s daemon [start|serve|status|stop|reload]
   %[1]s doctor
   %[1]s rules [aerospace|hyprland]
@@ -35,7 +36,7 @@ Environment:
   WISP_SHELL    Shell for --terminal/shell. Defaults to SHELL, then /bin/zsh.
   WISP_BACKEND  Backend override: auto, aerospace, hyprland, kitty.
   WISP_ACTIONS_PATH  Action catalog override. Linux prefers actions.linux.toml when present; otherwise actions.toml in config home.
-  WISP_LOG_PATH  Log path for palette actions. Defaults to ~/.cache/wisp/wisp.log.
+  WISP_LOG_PATH  Log path for menu actions. Defaults to ~/.cache/wisp/wisp.log.
   WISP_SOCKET_PATH  Unix socket for wispd. Defaults to $XDG_RUNTIME_DIR/wispd.sock or /tmp/wisp-$UID/wispd.sock.
   WISP_NO_DAEMON  Run client commands directly without contacting/autostarting wispd.
 `, cfg.command)
@@ -117,26 +118,26 @@ func bindings(cfg envConfig, backend string) error {
 		fmt.Println(`# Wisp prefix bindings for Aerospace.
 # Add this to ~/.aerospace.toml, then reload Aerospace.
 [mode.main.binding]
-alt-space = ['exec-and-forget wisp hint show', 'mode wisp']
+alt-space = ['exec-and-forget wisp palette show', 'mode wisp']
 
 [mode.wisp.binding]
-esc = ['exec-and-forget wisp hint close', 'mode main']
+esc = ['exec-and-forget wisp palette close', 'mode main']
 space = 'mode wisp'`)
 		for _, a := range actions {
 			key := strings.ToLower(strings.TrimSpace(a.Key))
 			if key == "" || a.ID == "" || key == "space" {
 				continue
 			}
-			fmt.Printf("%s = ['exec-and-forget wisp hint close', 'exec-and-forget wisp action %s', 'mode main']\n", key, a.ID)
+			fmt.Printf("%s = ['exec-and-forget wisp palette close', 'exec-and-forget wisp action %s', 'mode main']\n", key, a.ID)
 		}
 	case "hyprland":
 		fmt.Println(`# Wisp prefix bindings for Hyprland.
 # Add this to hyprland.conf, then reload Hyprland.
-bind = ALT, SPACE, exec, wisp hint show
+bind = ALT, SPACE, exec, wisp palette show
 bind = ALT, SPACE, submap, wisp
 
 submap = wisp
-bind = , ESCAPE, exec, wisp hint close
+bind = , ESCAPE, exec, wisp palette close
 bind = , ESCAPE, submap, reset
 bind = , SPACE, submap, wisp`)
 		for _, a := range actions {
@@ -144,7 +145,7 @@ bind = , SPACE, submap, wisp`)
 			if key == "" || a.ID == "" || key == "SPACE" {
 				continue
 			}
-			fmt.Printf("bind = , %s, exec, sh -lc 'wisp hint close; wisp action %s'\n", key, a.ID)
+			fmt.Printf("bind = , %s, exec, sh -lc 'wisp palette close; wisp action %s'\n", key, a.ID)
 			fmt.Printf("bind = , %s, submap, reset\n", key)
 		}
 		fmt.Println("submap = reset")

@@ -37,6 +37,13 @@ func run(cfg envConfig, args []string) error {
 
 	if shouldDelegate(args) && daemonUsable() {
 		if err := ensureDaemon(cfg); err == nil {
+			if args[0] == "menu" {
+				// Old or cross-binary daemons must carry the client's context explicitly.
+				// env's -- also prevents target-path inference from its first argument.
+				args = []string{"run", "--id", "palette", "--title", "Wisp Menu", "--path", "", "--dir", "", "--layout", "", "--", "/usr/bin/env", "--"}
+				args = append(args, paletteContextEnv(cfg)...)
+				args = append(args, cfg.self, "_palette")
+			}
 			return sendDaemon(cfg, daemonRequest{Op: "launch", Args: args})
 		}
 	}
@@ -70,14 +77,14 @@ func runDirect(cfg envConfig, args []string) error {
 			backend = args[1]
 		}
 		return bindings(cfg, backend)
-	case "hint":
+	case "palette", "hint":
 		return hintCommand(cfg, args[1:])
 	case "actions":
 		return actionsCommand(cfg, args[1:])
 	case "_palette":
 		return paletteBody(cfg)
-	case "palette":
-		inv := invocation{Mode: "run", ID: "palette", Title: "Wisp Palette", Command: cfg.self, Args: []string{"_palette"}}
+	case "menu":
+		inv := invocation{Mode: "run", ID: "palette", Title: "Wisp Menu", Command: cfg.self, Args: []string{"_palette"}}
 		return launchInvocation(cfg, inv)
 	case "show", "hide":
 		return overlayCommand(cfg, args[0] == "show")
@@ -110,9 +117,9 @@ func shouldDelegate(args []string) bool {
 		return false
 	}
 	switch args[0] {
-	case "show", "hide", "action", "summon", "shell", "run", "palette", "-t", "--terminal":
+	case "show", "hide", "action", "summon", "shell", "run", "menu", "-t", "--terminal":
 		return true
-	case "daemon", "doctor", "rules", "bindings", "hint", "actions", "_palette", "_launch_action", "-h", "--help", "help":
+	case "daemon", "doctor", "rules", "bindings", "palette", "hint", "actions", "_palette", "_launch_action", "-h", "--help", "help":
 		return false
 	default:
 		return true

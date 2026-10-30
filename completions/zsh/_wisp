@@ -1,6 +1,14 @@
 #compdef wisp
 
 _wisp() {
+  if (( CURRENT == 3 )) && [[ ${words[2]} == (palette|hint) ]]; then
+    _values 'Palette command' \
+      'show[show the native prefix Palette]' \
+      'close[close the native prefix Palette]' \
+      'text[print the Palette text]'
+    return
+  fi
+
   local -a commands
   commands=(
     'run:open a command in a Wisp surface'
@@ -8,11 +16,12 @@ _wisp() {
     'summon:open or focus a named Wisp surface'
     'action:run an action from the Wisp catalog'
     'actions:inspect or initialize the Wisp action catalog'
-    'palette:open the Wisp action palette'
+    'palette:show, close, or print the native prefix Palette'
+    'menu:open the terminal/fzf Wisp Menu'
     'show:reveal the Hyprland utility overlay'
     'hide:hide the Hyprland overlay without closing applications'
     'bindings:print hotkey binding snippets'
-    'hint:show Wisp mode key hints'
+    'hint:compatibility alias for palette'
     'daemon:manage the Wisp daemon'
     'doctor:print Wisp diagnostics'
     'rules:print window-manager rule snippets'
