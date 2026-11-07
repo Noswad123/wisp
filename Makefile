@@ -1,6 +1,6 @@
 APP_NAME = wisp
 BIN_DIR = ./bin
-INSTALL_DIR ?= $(HOME)/.local/bin
+INSTALL_DIR ?= $(HOME)/.local/libexec/arcana-dev/wisp/bin
 UNAME_S := $(shell uname -s)
 
 .PHONY: all build check fmt install smoke test clean help

@@ -19,10 +19,17 @@ binary with the platform hint helper: Swift/Cocoa on macOS (when `swiftc` is
 available), or Python/GTK layer-shell on Linux. `make build` also puts the helper
 beside `bin/wisp` for testing without installation.
 
-By default this installs to `~/.local/bin`. Override with:
+By default this installs to `~/.local/libexec/arcana-dev/wisp/bin`, keeping
+`wisp`, the `wispd` symlink, and the platform hint helper together as siblings.
+`make install` uses the same scoped destination.
+Arcana reserves `~/.local/bin` for stable launchers. Do not add the dev root
+(`~/.local/libexec/arcana-dev`) or its app `bin` directories to global `PATH`.
+After a valid bundle is installed, select it with `arcana source use dev wisp`.
+For an explicit standalone install outside Arcana, override with:
 
 ```bash
 WISP_BIN_DIR=/usr/local/bin ./install.sh
+make install INSTALL_DIR=/usr/local/bin
 ```
 
 Completions install by default to:

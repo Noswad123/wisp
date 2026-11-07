@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-bin_dir="${WISP_BIN_DIR:-$HOME/.local/bin}"
+bin_dir="${WISP_BIN_DIR:-$HOME/.local/libexec/arcana-dev/wisp/bin}"
 zsh_completion_dir="${WISP_ZSH_COMPLETION_DIR:-$HOME/.local/share/zsh/site-functions}"
 bash_completion_dir="${WISP_BASH_COMPLETION_DIR:-$HOME/.local/share/bash-completion/completions}"
 install_completions="${WISP_INSTALL_COMPLETIONS:-1}"

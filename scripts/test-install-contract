@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+bash -n "$repo_root/install.sh"
+installer="$(<"$repo_root/install.sh")"
+# Inspect, never source the installer: sourcing would build and install.
+[[ "$installer" == *'bin_dir="${WISP_BIN_DIR:-$HOME/.local/libexec/arcana-dev/wisp/bin}"'* ]]
+for companion in wisp wispd wisp-hint-macos wisp-hint-linux; do
+  [[ "$installer" == *'"$bin_dir/'"$companion"'"'* ]]
+done
+[[ "$installer" == *'ln -sf "wisp" "$bin_dir/wispd"'* ]]
+[[ "$installer" == *'${WISP_ZSH_COMPLETION_DIR:-$HOME/.local/share/zsh/site-functions}'* ]]
+[[ "$installer" == *'${WISP_BASH_COMPLETION_DIR:-$HOME/.local/share/bash-completion/completions}'* ]]
+[[ "$installer" == *'${WISP_INSTALL_COMPLETIONS:-1}'* ]]
+for destination in /contract/home/.local/libexec/arcana-dev/wisp/bin '/contract/standalone bin'; do
+  if [[ "$destination" == /contract/home/* ]]; then
+    dry_run="$(env -u INSTALL_DIR make -s -n -C "$repo_root" install HOME=/contract/home)"
+  else
+    dry_run="$(make -s -n -C "$repo_root" install "INSTALL_DIR=$destination")"
+  fi
+  for companion in wisp wispd wisp-hint-macos wisp-hint-linux; do
+    [[ "$dry_run" == *'"'"$destination/$companion"'"'* ]]
+  done
+  [[ "$dry_run" == *'ln -sf "wisp"'* ]]
+  [[ "$dry_run" == *'.local/share/zsh/site-functions/_wisp"'* ]]
+  [[ "$dry_run" == *'.local/share/bash-completion/completions/wisp"'* ]]
+done
+printf 'wisp installer contract passed (no build or install)\n'
